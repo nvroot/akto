@@ -7,31 +7,38 @@ import com.akto.dao.SignupDao;
 import com.akto.dao.UsersDao;
 import com.akto.dao.billing.OrganizationsDao;
 import com.akto.dao.context.Context;
+import com.akto.database_abstractor_authenticator.JwtAuthenticator;
 import com.akto.dto.ApiToken;
+import com.akto.dto.ApiToken.Utility;
 import com.akto.dto.SignupUserInfo;
 import com.akto.dto.User;
-import com.akto.dto.ApiToken.Utility;
 import com.akto.dto.billing.Organization;
 import com.akto.listener.InitializerListener;
+import com.akto.log.LoggerMaker;
+import com.akto.log.LoggerMaker.LogDb;
 import com.akto.util.DashboardMode;
 import com.akto.utils.JWT;
 import com.akto.utils.Token;
 import com.mongodb.BasicDBObject;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jws;
-import org.apache.commons.lang3.StringUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import javax.servlet.*;
-import javax.servlet.http.Cookie;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
-import javax.servlet.http.HttpSession;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import javax.servlet.Filter;
+import javax.servlet.FilterChain;
+import javax.servlet.FilterConfig;
+import javax.servlet.ServletException;
+import javax.servlet.ServletRequest;
+import javax.servlet.ServletResponse;
+import javax.servlet.http.Cookie;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import javax.servlet.http.HttpSession;
+import org.apache.commons.lang3.StringUtils;
+import com.akto.util.enums.GlobalEnums;
+import com.akto.util.enums.GlobalEnums.CONTEXT_SOURCE;
 
 // This is the first filter which will hit for every request to server
 // First checks if the access token is valid or not (from header)
@@ -40,9 +47,15 @@ import java.util.Objects;
 // Using the username from the access token it sets the user details in session to be used by other filters/action
 public class UserDetailsFilter implements Filter {
 
-    private static final Logger logger = LoggerFactory.getLogger(UserDetailsFilter.class);
+    private static final LoggerMaker logger = new LoggerMaker(UserDetailsFilter.class, LogDb.DASHBOARD);
     public static final String LOGIN_URI = "/login";
     public static final String API_URI = "/api";
+
+    private static void setSession(HttpSession session, String username, String signedUp){
+        session.setAttribute("username", username);
+        session.setAttribute("login", Context.now());
+        session.setAttribute("signedUp", signedUp);
+    }
 
     @Override
     public void init(FilterConfig filterConfig) { }
@@ -76,11 +89,17 @@ public class UserDetailsFilter implements Filter {
         HttpServletResponse httpServletResponse = (HttpServletResponse) servletResponse;
         String accessTokenFromResponse = httpServletResponse.getHeader(AccessTokenAction.ACCESS_TOKEN_HEADER_NAME);
         String accessTokenFromRequest = httpServletRequest.getHeader(AccessTokenAction.ACCESS_TOKEN_HEADER_NAME);
+        String contextSourceFromRequest = httpServletRequest.getHeader(AccessTokenAction.CONTEXT_SOURCE_HEADER);
+
+        String aktoSessionTokenFromRequest = httpServletRequest.getHeader(AccessTokenAction.AKTO_SESSION_TOKEN);
+
         String requestURI = httpServletRequest.getRequestURI();
 
         // get api key header
         String apiKey = httpServletRequest.getHeader("X-API-KEY");
         String accessToken;
+
+        String accessTokenForMcpRequest = httpServletRequest.getHeader("x-akto-mcp-token");
 
         // if api key present then check if valid api key or not and generate access token
         // else find access token from request header
@@ -88,6 +107,65 @@ public class UserDetailsFilter implements Filter {
         Utility utility = null;
 
         HttpSession session = httpServletRequest.getSession(false);
+        if(StringUtils.isEmpty(contextSourceFromRequest)){
+            Context.contextSource.set(GlobalEnums.CONTEXT_SOURCE.API);
+        } else {
+            try {
+                Context.contextSource.set(GlobalEnums.CONTEXT_SOURCE.valueOf(contextSourceFromRequest.toUpperCase()));
+            } catch (Exception e) {
+                Context.contextSource.set(GlobalEnums.CONTEXT_SOURCE.API);
+            }
+        }
+
+        if(StringUtils.isNotEmpty(aktoSessionTokenFromRequest) && httpServletRequest.getRequestURI().contains("agent")){
+            try {
+                Jws<Claims> claims = JwtAuthenticator.authenticate(aktoSessionTokenFromRequest);
+                Context.accountId.set((int) claims.getBody().get("accountId"));
+            } catch (Exception e) {
+                e.printStackTrace();
+                httpServletResponse.sendError(403);
+                return;
+            }
+        }
+
+        if(accessTokenForMcpRequest != null && !accessTokenForMcpRequest.isEmpty()) {
+            try {
+                Jws<Claims> claims = JwtAuthenticator.authenticate(accessTokenForMcpRequest);
+                int accountId = (int) claims.getBody().get("accountId");
+                String contextSource = (String) claims.getBody().get("contextSource");
+                CONTEXT_SOURCE contextSourceEnum = CONTEXT_SOURCE.valueOf(contextSource.toUpperCase());
+                String authRole = (String) claims.getBody().get("auth_role");
+                String username = (String) claims.getBody().get("username");
+                session = httpServletRequest.getSession(true);
+                if(username == null || username.isEmpty()) {
+                    httpServletResponse.sendError(403);
+                    return;
+                }
+                if(authRole != null && authRole.equalsIgnoreCase("mcp") && contextSourceEnum != null && accountId > 0) {
+                    Context.contextSource.set(contextSourceEnum);
+                    Context.accountId.set(accountId);
+                    User user = UsersDao.instance.findOne("login", username);
+                    if(user == null) {
+                        httpServletResponse.sendError(403);
+                        return;
+                    }
+                    session.setAttribute("user", user);
+                    session.setAttribute("accountId", accountId);
+                    setSession(session, username, "false");
+                    Context.userId.set(user.getId());
+                    filterChain.doFilter(servletRequest, servletResponse);
+                    return;
+                } else {
+                    httpServletResponse.sendError(403);
+                    return;
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+                httpServletResponse.sendError(403);
+                return;
+            }
+        }
+
         if (apiKeyFlag) {
             // For apiKey sessions we want to start fresh. Hence, delete any existing session and create new one
             if (session != null) session.invalidate();
@@ -147,7 +225,7 @@ public class UserDetailsFilter implements Filter {
             Token token = AccessTokenAction.generateAccessTokenFromServletRequest(httpServletRequest);
             if (token == null) {
                 Cookie cookie = AccessTokenAction.generateDeleteCookie();
-                logger.info("resetting refresh token cookie");
+                logger.debug("resetting refresh token cookie");
                 httpServletResponse.addCookie(cookie);
                 if (accessTokenFromRequest != null) {
                     httpServletResponse.sendError(403);
@@ -169,7 +247,7 @@ public class UserDetailsFilter implements Filter {
 
         // session will be non-null for external API Key requests and when session data has not been deleted
         if (session == null ) {
-            logger.info("Session expired");
+            logger.debug("Session expired");
             Token tempToken = AccessTokenAction.generateAccessTokenFromServletRequest(httpServletRequest);
             // If we are able to extract token from Refresh Token then this means RT is valid and new session can be created
             if (tempToken== null) {
@@ -177,10 +255,8 @@ public class UserDetailsFilter implements Filter {
                 return;
             }
             session = httpServletRequest.getSession(true);
-            session.setAttribute("username", username);
-            session.setAttribute("login", Context.now());
-            session.setAttribute("signedUp", signedUp);
-            logger.info("New session created");
+            setSession(session, username, signedUp);
+            logger.debug("New session created");
         }
 
         // only for access-token based auth we check if session is valid or not
@@ -208,14 +284,12 @@ public class UserDetailsFilter implements Filter {
                         return ;
                     }
                 }else{
-                    logger.info("Logout object not found");
+                    //logger.debug("Logout object not found");
                 }
             } catch (Exception ignored) {
                 redirectIfNotLoginURI(filterChain, httpServletRequest, httpServletResponse);
                 return ;
             }
-
-
         }
 
         session.setAttribute(AccessTokenAction.ACCESS_TOKEN_HEADER_NAME, accessToken);
@@ -284,7 +358,7 @@ public class UserDetailsFilter implements Filter {
                 if (accountId > 0) {
                     if(user.getAccounts().containsKey(accountIdStr)) {
                         Context.accountId.set(accountId);
-                        logger.info("choosing account: " + accountIdStr);
+                        //logger.debug("choosing account: " + accountIdStr);
                     } else {
 
                         accountIdStr = user.findAnyAccountId();

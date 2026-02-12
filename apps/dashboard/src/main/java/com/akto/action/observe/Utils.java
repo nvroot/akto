@@ -13,11 +13,6 @@ public class Utils {
     public final static int DELTA_PERIOD_VALUE = 60 * 24 * 60 * 60;
     public static final int LIMIT = -1;
 
-    public static List<BasicDBObject> fetchEndpointsInCollectionUsingHost(int apiCollectionId, int skip) {
-
-        return ApiCollectionsDao.fetchEndpointsInCollectionUsingHost(apiCollectionId, skip, LIMIT, DELTA_PERIOD_VALUE);
-    }
-
     public final static String _START_TS = "startTs";
     public final static String _LAST_SEEN_TS = "lastSeenTs";
 
@@ -43,5 +38,31 @@ public class Utils {
             }
         }
         return escaped.toString();
+    }
+
+    public static boolean isInputSanitized(String value, StringBuilder error, int maxValueLength){
+        if (value == null || value.isEmpty()) {
+            error.append("Value cannot be null or empty");
+            return false;
+        }
+
+        if (value.length() > maxValueLength) {
+            error.append("Value cannot be greater than ").append(maxValueLength).append(" characters");
+            return false;
+        }
+
+        for (char c : value.toCharArray()) {
+            boolean alphabets = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+            boolean numbers = c >= '0' && c <= '9';
+            boolean specialChars = c == '-' || c == '.' || c == '_' || c == '/' || c == '+';
+            boolean spaces = c == ' ';
+
+            if (!(alphabets || numbers || specialChars || spaces)) {
+                error.append("Value names can only be alphanumeric and contain '-','.','_','/' and '_'");
+                return false;
+
+            }
+        }
+        return true;
     }
 }

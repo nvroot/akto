@@ -25,18 +25,18 @@ const api = {
         })
     },
 
-    importDataFromPostmanFile(postmanCollectionFile, allowReplay) {
+    importDataFromPostmanFile(postmanCollectionFile, allowReplay, miniTestingName) {
         return request({
             url: '/api/importDataFromPostmanFile',
             method: 'post',
-            data: {postmanCollectionFile, allowReplay}
+            data: {postmanCollectionFile, allowReplay, miniTestingName}
         })
     },
-    importPostmanWorkspace(workspace_id, allowReplay, api_key) {
+    importPostmanWorkspace(workspace_id, allowReplay, api_key, miniTestingName) {
         return request({
             url: '/api/importPostmanWorkspace',
             method: 'post',
-            data: {workspace_id, allowReplay, api_key}
+            data: {workspace_id, allowReplay, api_key, miniTestingName}
         })
     },
 
@@ -130,11 +130,11 @@ const api = {
         })
     },
 
-    fetchRuntimeHelmCommand() {
+    fetchRuntimeHelmCommand(expiryTimeInMonth) {
         return request({
             url: '/api/fetchRuntimeHelmCommand',
             method: 'post',
-            data: {}
+            data: {expiryTimeInMonth}
         })
     },
 
@@ -168,7 +168,107 @@ const api = {
             method: 'post',
             data: {sourceCodeType}
         })
-    }
+    },
+
+    initiateCrawler(hostname, username, password, apiKey, dashboardUrl, testRoleHexId, outscopeUrls, crawlingTime, selectedModuleName, customHeaders, runTestAfterCrawling, selectedMiniTestingService, urlTemplatePatterns, applicationPages, collectionName) {
+        return request({
+            url: '/api/initiateCrawler',
+            method: 'post',
+            data: {hostname, username, password, apiKey, dashboardUrl, testRoleHexId, outscopeUrls, crawlingTime, selectedModuleName, customHeaders, runTestAfterCrawling, selectedMiniTestingService, urlTemplatePatterns, applicationPages, collectionName},
+            timeout: 360000
+        })
+    },
+
+    fetchAvailableDastModules() {
+        return request({
+            url: '/api/fetchAvailableDastModules',
+            method: 'post',
+            data: {}
+        })
+    },
+
+    initiateMCPScan(serverUrl, authKey, authValue, dashboardUrl) {
+        return request({
+            url: '/api/initiateMCPScan',
+            method: 'post',
+            data: {serverUrl, authKey, authValue, dashboardUrl}
+        })
+    },
+
+    initiateAIAgentConnectorImport(connectorType, connectorConfig, dataIngestionUrl, recurringIntervalSeconds) {
+        return request({
+            url: '/api/initiateAIAgentConnectorImport',
+            method: 'post',
+            data: {
+                connectorType,
+                dataIngestionUrl,
+                recurringIntervalSeconds,
+                ...connectorConfig
+            }
+        })
+    },
+
+    importFromUrl(url, testRoleId, requestBody) {
+        return request({
+            url: '/api/importFromUrl',
+            method: 'post',
+            data: {url, testRoleId, requestBody}
+        })
+    },
+
+    initiateMCPRecon(ipRange) {
+        return request({
+            url: '/api/initiateMCPRecon',
+            method: 'post',
+            data: {ipRange}
+        })
+    },
+
+    addAwsAccountIdsForApiGatewayLogging(awsAccountIds) {
+        return request({
+            url: '/api/addAwsAccountIdsForApiGatewayLogging',
+            method: 'post',
+            data: { awsAccountIds }
+        })
+    },
+
+    fetchAwsAccountIdsForApiGatewayLogging() {
+        return request({
+            url: '/api/fetchAwsAccountIdsForApiGatewayLogging',
+            method: 'post',
+            data: { }
+        })
+    },
+
+    importImpervaSchema(formData) {
+        return request({
+            url: '/api/importImpervaSchema',
+            method: 'post',
+            data: formData,
+        })
+    },
+
+    initiateAIAgentConnectorImport(connectorType, connectorConfig, dataIngestionUrl, recurringIntervalSeconds) {
+        return request({
+            url: '/api/initiateAIAgentConnectorImport',
+            method: 'post',
+            data: {
+                connectorType,
+                dataIngestionUrl,
+                recurringIntervalSeconds,
+                ...connectorConfig
+            }
+        })
+    },
+
+    saveDataDogConnector(datadogApiKey, datadogAppKey, datadogSite, serviceNames) {
+        return request({
+            url: '/api/saveDataDogConfigs',
+            method: 'post',
+            data: {datadogApiKey, datadogAppKey, datadogSite, serviceNames}
+        })
+    },
+
 }
 
 export default api

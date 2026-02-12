@@ -15,8 +15,18 @@ public class DashboardMaliciousEvent {
   private long timestamp;
   private String type;
   private String refId;
+  private String category;
   private String subCategory;
-
+  private String eventType;
+  private String payload;
+  private String metadata;
+  private boolean successfulExploit;
+  private String status;
+  private String label;
+  private String host;
+  private String jiraTicketUrl;
+  private String severity;
+  private String sessionId;
   public DashboardMaliciousEvent() {}
 
   public DashboardMaliciousEvent(
@@ -31,7 +41,18 @@ public class DashboardMaliciousEvent {
       long timestamp,
       String type,
       String refId,
-      String subCategory) {
+      String category,
+      String subCategory,
+      String eventType,
+      String payload,
+      String metadata,
+      boolean successfulExploit,
+      String status,
+      String label,
+      String host,
+      String jiraTicketUrl,
+      String severity,
+      String sessionId) {
     this.id = id;
     this.actor = actor;
     this.filter_id = filter;
@@ -43,7 +64,18 @@ public class DashboardMaliciousEvent {
     this.timestamp = timestamp;
     this.type = type;
     this.refId = refId;
+    this.category = category;
     this.subCategory = subCategory;
+    this.eventType = eventType;
+    this.payload = payload;
+    this.metadata = metadata;
+    this.successfulExploit = successfulExploit;
+    this.status = status;
+    this.label = label;
+    this.host = host;
+    this.jiraTicketUrl = jiraTicketUrl;
+    this.severity = severity;
+    this.sessionId = sessionId;
   }
 
   public String getId() {
@@ -134,12 +166,100 @@ public class DashboardMaliciousEvent {
     this.refId = refId;
   }
 
+  public String getCategory() {
+    return category;
+  }
+
+  public void setCategory(String category) {
+    this.category = category;
+  }
+
   public String getSubCategory() {
     return subCategory;
   }
 
   public void setSubCategory(String subCategory) {
     this.subCategory = subCategory;
+  }
+
+  public String getEventType() {
+    return eventType;
+  }
+
+  public void setEventType(String eventType) {
+    this.eventType = eventType;
+  }
+
+  public String getPayload() {
+    return payload;
+  }
+
+  public void setPayload(String payload) {
+    this.payload = payload;
+  }
+
+  public String getMetadata() {
+    return metadata;
+  }
+
+  public void setMetadata(String metadata) {
+    this.metadata = metadata;
+  }
+
+  public boolean getSuccessfulExploit() {
+    return successfulExploit;
+  }
+
+  public void setSuccessfulExploit(boolean successfulExploit) {
+    this.successfulExploit = successfulExploit;
+  }
+
+  public String getStatus() {
+    return status;
+  }
+
+  public void setStatus(String status) {
+    this.status = status;
+  }
+
+  public String getLabel() {
+    return label;
+  }
+
+  public void setLabel(String label) {
+    this.label = label;
+  }
+
+  public String getHost() {
+    return host;
+  }
+
+  public void setHost(String host) {
+    this.host = host;
+  }
+
+  public String getJiraTicketUrl() {
+    return jiraTicketUrl;
+  }
+
+  public void setJiraTicketUrl(String jiraTicketUrl) {
+    this.jiraTicketUrl = jiraTicketUrl;
+  }
+
+  public String getSeverity() {
+    return severity;
+  }
+
+  public void setSeverity(String severity) {
+    this.severity = severity;
+  }
+
+  public String getSessionId() {
+    return sessionId;
+  }
+
+  public void setSessionId(String sessionId) {
+    this.sessionId = sessionId;
   }
 
 }

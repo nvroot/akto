@@ -2,9 +2,11 @@ package com.akto.data_actor;
 
 import com.akto.dto.*;
 import com.akto.dto.billing.Organization;
+import com.akto.dto.monitoring.ModuleInfo;
 import com.akto.dto.filter.MergedUrls;
 import com.akto.dto.runtime_filters.RuntimeFilter;
 import com.akto.dto.test_editor.YamlTemplate;
+import com.akto.dto.threat_detection.ApiHitCountInfo;
 import com.akto.dto.traffic.SampleData;
 import com.akto.dto.traffic.SuspectSampleData;
 import com.akto.dto.traffic.TrafficInfo;
@@ -123,6 +125,11 @@ public class DbActor extends DataActor {
         return DbLayer.fetchApiInfos();
     }
 
+    
+    public List<ApiInfo> fetchApiRateLimits(ApiInfo.ApiInfoKey lastApiInfoKey) {
+        return DbLayer.fetchApiRateLimits(lastApiInfoKey);
+    }
+
     public List<ApiInfo> fetchNonTrafficApiInfos() {
         return DbLayer.fetchNonTrafficApiInfos();
     }
@@ -224,4 +231,32 @@ public class DbActor extends DataActor {
     public Set<MergedUrls> fetchMergedUrls() {
         return DbLayer.fetchMergedUrls();
     }
+
+    public void bulkInsertApiHitCount(List<ApiHitCountInfo> apiHitCountInfoList) throws Exception {
+        DbLayer.bulkinsertApiHitCount(apiHitCountInfoList);
+    }
+    
+    @Override
+    public void updateModuleInfo(ModuleInfo moduleInfo) {
+        DbLayer.updateModuleInfo(moduleInfo);
+    }
+
+    public String fetchOpenApiSchema(int apiCollectionId) {
+        return DbLayer.fetchOpenApiSchema(apiCollectionId);
+    }
+
+    public void insertDataIngestionLog(Log log) {
+        DbLayer.insertDataIngestionLog(log);
+    }
+
+    public List<ApiCollection> fetchAllApiCollections() {
+        return DbLayer.fetchAllApiCollections();
+    }
+
+    @Override
+    public List<ModuleInfo> fetchAndUpdateModuleForReboot(ModuleInfo.ModuleType moduleType, String miniRuntimeName) {
+        return DbLayer.fetchAndUpdateModuleForReboot(moduleType, miniRuntimeName);
+    }
+
+
 }

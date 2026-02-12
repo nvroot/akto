@@ -28,6 +28,8 @@ import com.akto.dao.context.Context;
 import com.akto.dao.demo.VulnerableRequestForTemplateDao;
 import com.akto.dao.testing_run_findings.TestingRunIssuesDao;
 import com.akto.dto.rbac.UsersCollectionsList;
+import com.akto.dto.testing.AccessTypeTestingEndpoints;
+import com.akto.dto.testing.AuthTypeTestingEndpoints;
 import com.akto.dto.testing.CustomTestingEndpoints;
 import com.akto.dto.testing.SensitiveDataEndpoints;
 import com.akto.dto.testing.TestingEndpoints;
@@ -47,6 +49,8 @@ public class ApiCollectionUsers {
 
     private static final ScheduledExecutorService executorService = Executors.newSingleThreadScheduledExecutor();
     private static final Logger logger = LoggerFactory.getLogger(ApiCollectionUsers.class);
+
+    private static final int MAX_ALLOWED_API_COUNT = 10000;  
 
     public enum CollectionType {
         ApiCollectionId, Id_ApiCollectionId, Id_ApiInfoKey_ApiCollectionId
@@ -75,7 +79,19 @@ public class ApiCollectionUsers {
         if(conditions == null || conditions.isEmpty()){
             return new ArrayList<>();
         }
+        List<Bson> filterList = SingleTypeInfoDao.filterForHostHostHeaderRaw();
+        boolean hasAuthFilter = checkAuthTypeFilter(conditions);
+        boolean hasApiAccessType = checkApiAccessTypeFilter(conditions);
+        if (hasAuthFilter || hasApiAccessType) {
+            int apiInfoCount = getApisCountFromConditions(conditions, deactivatedCollections);
+            if (apiInfoCount >= MAX_ALLOWED_API_COUNT) {
+                Bson apiInfoFilter = getFilters(conditions,CollectionType.Id_ApiCollectionId);
+                return findAllAsBasicDBObject(apiInfoFilter, skip, limit, Projections.include("_id"));
+            }
+        }
         Bson singleTypeInfoFilters = getFilters(conditions, CollectionType.ApiCollectionId);
+        Bson filters = Filters.and(filterList);
+        singleTypeInfoFilters = Filters.and(filters, singleTypeInfoFilters);
         if (deactivatedCollections != null && !deactivatedCollections.isEmpty()) {
             singleTypeInfoFilters = Filters.and(singleTypeInfoFilters, Filters.nin(SingleTypeInfo._API_COLLECTION_ID, deactivatedCollections));
         }
@@ -101,7 +117,18 @@ public class ApiCollectionUsers {
             return 0;
         }
 
+        boolean hasAuthFilter = checkAuthTypeFilter(conditions);
+        if (hasAuthFilter) {
+            int apiInfoCount = getApisCountFromConditions(conditions, deactivatedCollections);
+            if (apiInfoCount >= MAX_ALLOWED_API_COUNT) {
+                return apiInfoCount;
+            }
+        }
+
+        List<Bson> filterList = SingleTypeInfoDao.filterForHostHostHeaderRaw();
+        Bson filters = Filters.and(filterList);
         Bson stiFiltes = getFilters(conditions, CollectionType.ApiCollectionId);
+        stiFiltes = Filters.and(filters, stiFiltes);
         List<Bson> pipeLine = new ArrayList<>();
         pipeLine.add(Aggregates.match(stiFiltes));
 
@@ -299,4 +326,31 @@ public class ApiCollectionUsers {
         removeFromCollectionsForCollectionId(Collections.singletonList(ep), apiCollectionId);
     }
 
+    private static boolean checkAuthTypeFilter(List<TestingEndpoints> conditions) {
+        for (TestingEndpoints condition : conditions) {
+            if (condition instanceof AuthTypeTestingEndpoints) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean checkApiAccessTypeFilter(List<TestingEndpoints> conditions) {
+        for (TestingEndpoints condition : conditions) {
+            if (condition instanceof AccessTypeTestingEndpoints) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static List<BasicDBObject> findAllAsBasicDBObject(Bson filter,int skip,int limit,Bson projection) {
+        List<BasicDBObject> results = new ArrayList<>();
+        MongoCursor<BasicDBObject> cursor = ApiInfoDao.instance.getMCollection().find(filter, BasicDBObject.class).projection(projection).skip(skip).limit(limit).iterator();
+        while (cursor.hasNext()) {
+            results.add(cursor.next());
+        }
+
+        return results;
+    }
 }

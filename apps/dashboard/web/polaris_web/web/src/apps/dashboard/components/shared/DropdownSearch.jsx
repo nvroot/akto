@@ -1,4 +1,4 @@
-import { Autocomplete, Avatar, Checkbox, HorizontalStack, Icon, Link, Text, TextContainer } from '@shopify/polaris';
+import { Autocomplete, Avatar, Icon, Link, TextContainer } from '@shopify/polaris';
 import { SearchMinor, ChevronDownMinor } from '@shopify/polaris-icons';
 import React, { useState, useCallback, useEffect } from 'react';
 import func from "@/util/func";
@@ -6,7 +6,7 @@ function DropdownSearch(props) {
 
     const id = props.id ? props.id : "dropdown-search"
 
-    const { disabled, label, placeholder, optionsList, setSelected, value , avatarIcon, preSelected, allowMultiple, itemName, dropdownSearchKey, isNested, sliceMaxVal} = props
+    const { disabled, label, placeholder, optionsList, setSelected, value , avatarIcon, preSelected, allowMultiple, itemName, dropdownSearchKey, isNested, sliceMaxVal, showSelectedItemLabels=false, searchDisable=false, textfieldRequiredIndicator=false} = props
 
     const deselectedOptions = optionsList
     const [selectedOptions, setSelectedOptions] = useState(preSelected ? preSelected : []);
@@ -14,25 +14,22 @@ function DropdownSearch(props) {
     const [options, setOptions] = useState(deselectedOptions);
     const [loading, setLoading] = useState(false);
     const [checked,setChecked] = useState(false)
-
-
     useEffect(() => {
-        if(value!=undefined){
+        if(value!==undefined){
             setInputValue((prev) => {
-                if(prev == value){
+                if(prev === value){
                     return prev;
                 }
                 return value;
             });
         }
-        if(preSelected!=undefined){
+        if(preSelected!==undefined){
             setSelectedOptions((prev) => {
                 if(func.deepComparison(prev,preSelected)){
                     return prev;
                 }
                 return [...preSelected];
             });
-
         }
         setOptions((prev) => {
             if(selectedOptions.length > 0 || prev.length > 0){
@@ -100,7 +97,7 @@ function DropdownSearch(props) {
                         option[searchKey].match(filterRegex)
                     ).slice(0, defaultSliceValue);
 
-                    const title = deselectedOptions.length != defaultSliceValue && resultOptions.length >= defaultSliceValue
+                    const title = deselectedOptions.length !== defaultSliceValue && resultOptions.length >= defaultSliceValue
                         ? `Showing ${resultOptions.length} result${func.addPlurality(resultOptions.length)} only. (type more to refine results)`
                         : "Showing all results";
 
@@ -123,7 +120,8 @@ function DropdownSearch(props) {
     const updateSelection = useCallback(
         (selected) => {
             const selectedText = selected.map((selectedItem) => {
-                const matchedOption = options.find((option) => {  
+                let optionsArr = Array.isArray(options?.[0]?.options) ? options?.[0]?.options : options
+                const matchedOption = optionsArr.find((option) => {  
                     if (typeof option.value === "string")
                         return option.value.match(selectedItem);
                     else 
@@ -132,11 +130,14 @@ function DropdownSearch(props) {
                 return matchedOption && matchedOption.label;
             });
             setSelectedOptions([...selected]);
-
             if (avatarIcon) {
                 setInputValue(selected[0])
             } else if (allowMultiple) {
-                setInputValue(`${selected.length} ${itemName ? itemName : "item"}${selected.length == 1 ? "" : "s"} selected`)
+                if(showSelectedItemLabels) {                    
+                    if(selectedText.length === optionsList.length) setInputValue("All items selected");
+                    else setInputValue(func.getSelectedItemsText(selectedText))
+                }
+                else setInputValue(`${selected.length} ${itemName ? itemName : "item"}${selected.length == 1 ? "" : "s"} selected`)
             }
             else {
                 setInputValue(selectedText[0] || '');
@@ -176,19 +177,29 @@ function DropdownSearch(props) {
         <Autocomplete.TextField
             id={id}
             disabled={disabled}
-            onChange={updateText}
+            {...(!searchDisable ? {onChange:updateText}:{})}
             label={label}
             value={inputValue}
-            prefix={
-                <div style={{display: 'flex', gap: '4px', alignItems: 'center'}}>
-                    <Icon source={SearchMinor} color="base" />
-                    {avatarIcon && avatarIcon.length > 0 ? <Avatar customer size="extraSmall" name={avatarIcon} source={avatarIcon}/> : null}
-                </div>
+            {...(!searchDisable ? { 
+                prefix: (
+                    <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                        <Icon source={SearchMinor} color="base" />
+                        {avatarIcon && avatarIcon.length > 0 ? <Avatar customer size="extraSmall" name={avatarIcon} source={avatarIcon} /> : null}
+                    </div>
+                ) 
+            } : {})}
+            suffix={
+                <span
+                    onClick={() => document.getElementById(id)?.focus()}
+                    style={{ cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                >
+                    <Icon source={ChevronDownMinor} color="base" />
+                </span>
             }
-            suffix={<Icon source={ChevronDownMinor} color="base" />}
             placeholder={placeholder}
             autoComplete="off"
-            onFocus={handleFocusEvent}
+            requiredIndicator={textfieldRequiredIndicator}
+            {...(!searchDisable? {onFocus:handleFocusEvent}: {})}
         />
     );
 
@@ -205,21 +216,24 @@ function DropdownSearch(props) {
     );
 
     return (
-            <Autocomplete
-                {...(allowMultiple ? {allowMultiple:true} : {} )}
-                options={options.slice(0,sliceMaxVal || 20)}
-                selected={selectedOptions}
-                onSelect={updateSelection}
-                emptyState={emptyState}
-                loading={loading}
-                textField={textField}
-                preferredPosition='below'
-                {...(showSelectAll ? {actionBefore:{
-                    content: checkboxLabel,
-                    onAction: () => selectAllFunc(),
-                }} : {})}
-            >
-            </Autocomplete>
+            <>
+                <style>{`#${id} { cursor: pointer; }`}</style>
+                <Autocomplete
+                    {...(allowMultiple ? {allowMultiple:true} : {} )}
+                    options={options.slice(0,sliceMaxVal || 20)}
+                    selected={selectedOptions}
+                    onSelect={updateSelection}
+                    emptyState={emptyState}
+                    loading={loading}
+                    textField={textField}
+                    preferredPosition='below'
+                    {...(showSelectAll ? {actionBefore:{
+                        content: checkboxLabel,
+                        onAction: () => selectAllFunc(),
+                    }} : {})}
+                >
+                </Autocomplete>
+            </>
     );
 }
 

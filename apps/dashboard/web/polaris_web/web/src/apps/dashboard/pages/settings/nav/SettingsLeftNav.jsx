@@ -1,7 +1,7 @@
 import { Navigation } from "@shopify/polaris"
 import { StoreDetailsFilledMinor, IdentityCardFilledMajor, AutomationFilledMajor, AppsFilledMajor, ComposeMajor, ProfileMajor} from "@shopify/polaris-icons"
 import { ListFilledMajor, ReportFilledMinor, LockFilledMajor, CollectionsFilledMajor, PlanMajor, ChatMajor} from "@shopify/polaris-icons"
-import { VariantMajor, VocabularyMajor, AdjustMinor } from "@shopify/polaris-icons"
+import { VariantMajor, VocabularyMajor, AdjustMinor, UndoMajor, CodeMajor } from "@shopify/polaris-icons"
 import { useLocation, useNavigate } from "react-router-dom"
 import func from "@/util/func"
 
@@ -35,12 +35,18 @@ const SettingsLeftNav = () => {
             selected: page === "logs",
             onClick: () => navigate("/dashboard/settings/logs")
         }] : []
-    const metricsArr = window.IS_SAAS === 'true' ? [] : [{
+    const moduleInfoArr = [{
+            label: 'Module Info',
+            icon: CodeMajor,
+            selected: page === "module-info",
+            onClick: () => navigate("/dashboard/settings/module-info")
+        }]
+    const metricsArr = window.DASHBOARD_MODE !== 'ON_PREM' ? [{
         label: 'Metrics',
         icon: ReportFilledMinor,
         selected: page === "metrics",
         onClick: () => navigate("/dashboard/settings/metrics")
-    }]
+    }] : []
     const selfHostedArr = window.IS_SAAS === 'true' ? [{
         label: 'Self hosted',
         icon: PlanMajor,
@@ -68,6 +74,13 @@ const SettingsLeftNav = () => {
         onClick: () => navigate("/dashboard/settings/integrations/ci-cd")
     }] : [];
 
+    const threatConfigArr = window?.STIGG_FEATURE_WISE_ALLOWED?.THREAT_DETECTION?.isGranted ? [{
+        label: 'Threat Configuration',
+        icon: AutomationFilledMajor,
+        selected: page === "threat-configuration",
+        onClick: () => navigate("/dashboard/settings/threat-configuration")
+    }] : [];
+
     return (
         <Navigation>
             <Navigation.Section
@@ -80,12 +93,19 @@ const SettingsLeftNav = () => {
                     },
                     ...usersArr,
                     ...roleArr,
+                    ...threatConfigArr,
                     // {
                     //     label: 'Alerts',
                     //     icon: DiamondAlertMinor,
                     //     selected: page === "alerts",
                     //     onClick: () => navigate("/dashboard/settings")
                     // },
+                    {
+                        label: 'Undo Demerged APIs',
+                        icon: UndoMajor,
+                        selected: page === 'undo-demerge-apis',
+                        onClick: () => navigate("/dashboard/settings/undo-demerge-apis")
+                    },
                     ...cicdArr,
                     {
                         label: 'Integrations',
@@ -95,6 +115,7 @@ const SettingsLeftNav = () => {
                     },
                     
                     ...logsArr,
+                    ...moduleInfoArr,
                     ...metricsArr,
                     {
                         label: 'Auth types',
@@ -114,12 +135,6 @@ const SettingsLeftNav = () => {
                         selected: page === "advanced-filters",
                         onClick: () => navigate("/dashboard/settings/advanced-filters")
                     }, 
-                    {
-                        label: 'Tags',
-                        icon: CollectionsFilledMajor,
-                        selected: page === "tags",
-                        onClick: () => navigate("/dashboard/settings/tags")
-                    },
                     {
                         label: 'Test library',
                         icon: VocabularyMajor,

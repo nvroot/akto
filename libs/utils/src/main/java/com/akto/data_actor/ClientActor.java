@@ -5,6 +5,7 @@ import com.akto.testing.ApiExecutor;
 import com.auth0.jwt.JWT;
 import com.auth0.jwt.interfaces.DecodedJWT;
 import com.akto.dto.*;
+import com.akto.dto.monitoring.ModuleInfo;
 import com.akto.dto.billing.Organization;
 import com.akto.dto.bulk_updates.BulkUpdates;
 import com.akto.dto.data_types.BelongsToPredicate;
@@ -22,6 +23,7 @@ import com.akto.dto.runtime_filters.FieldExistsFilter;
 import com.akto.dto.runtime_filters.ResponseCodeRuntimeFilter;
 import com.akto.dto.runtime_filters.RuntimeFilter;
 import com.akto.dto.test_editor.YamlTemplate;
+import com.akto.dto.threat_detection.ApiHitCountInfo;
 import com.akto.dto.type.SingleTypeInfo;
 import com.akto.log.LoggerMaker;
 import com.akto.log.LoggerMaker.LogDb;
@@ -30,6 +32,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.BasicDBList;
 import com.mongodb.BasicDBObject;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.HashMap;
@@ -53,7 +56,9 @@ public class ClientActor extends DataActor {
     private static final Gson gson = new Gson();
     public static final String CYBORG_URL = "https://cyborg.akto.io";
     private static ExecutorService threadPool = Executors.newFixedThreadPool(maxConcurrentBatchWrites);
+    private static ExecutorService logThreadPool = Executors.newFixedThreadPool(50);
     private static AccountSettings accSettings;
+    private static final LoggerMaker logger = new LoggerMaker(ClientActor.class);
     
     ObjectMapper objectMapper = new ObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false).configure(DeserializationFeature.FAIL_ON_INVALID_SUBTYPE, false).configure(DeserializationFeature.FAIL_ON_IGNORED_PROPERTIES, false);
 
@@ -69,6 +74,17 @@ public class ClientActor extends DataActor {
         return dbAbsHost + "/api";
     }
 
+    public static int getAccountId() throws Exception {
+        String token = System.getenv("DATABASE_ABSTRACTOR_SERVICE_TOKEN");
+        DecodedJWT jwt = JWT.decode(token);
+        String payload = jwt.getPayload();
+        byte[] decodedBytes = Base64.getUrlDecoder().decode(payload);
+        String decodedPayload = new String(decodedBytes);
+        BasicDBObject basicDBObject = BasicDBObject.parse(decodedPayload);
+        int accId = (int) basicDBObject.getInt("accountId");
+        return accId;
+    }
+
     public static boolean checkAccount() {
         try {
             String token = System.getenv("DATABASE_ABSTRACTOR_SERVICE_TOKEN");
@@ -79,7 +95,7 @@ public class ClientActor extends DataActor {
             BasicDBObject basicDBObject = BasicDBObject.parse(decodedPayload);
             int accId = (int) basicDBObject.getInt("accountId");
             System.out.println("checkaccount accountId log " + accId);
-            return accId == 1000000;
+            return accId == 1000000 || accId == 1752722331;
         } catch (Exception e) {
             System.out.println("checkaccount error" + e.getStackTrace());
         }
@@ -720,6 +736,49 @@ public class ClientActor extends DataActor {
         return apiInfos;
     }
 
+    public List<ApiInfo> fetchApiRateLimits(ApiInfo.ApiInfoKey lastApiInfoKey) {
+        List<ApiInfo> allApiInfos = new ArrayList<>();
+        BasicDBObject payload = new BasicDBObject();
+        Map<String, List<String>> headers = buildHeaders();
+        OriginalHttpRequest request = new OriginalHttpRequest(url+ "/fetchApiRateLimits", "", "POST", gson.toJson(payload), headers, "");
+
+        for(int i = 0; i < 100; i++){
+            if(lastApiInfoKey != null){
+                payload.put("lastApiInfoKey", lastApiInfoKey);
+            }
+            try {
+                request.setBody(gson.toJson(payload));
+                OriginalHttpResponse response = ApiExecutor.sendRequest(request, true, null, false, null);
+                String responsePayload = response.getBody();
+                if (response.getStatusCode() != 200 || responsePayload == null) {
+                    loggerMaker.errorAndAddToDb("invalid response in fetchApiRateLimits", LoggerMaker.LogDb.RUNTIME);
+                    return allApiInfos;
+                }
+                BasicDBObject payloadObj;
+                try {
+                    payloadObj =  BasicDBObject.parse(responsePayload);
+                    BasicDBList objList = (BasicDBList) payloadObj.get("apiInfoRateLimits");
+
+                    // All apiInfos fetched
+                    if(objList.isEmpty()){
+                        break;
+                    }
+                    for (Object obj: objList) {
+                        BasicDBObject obj2 = (BasicDBObject) obj;
+                        ApiInfo apiInfo = objectMapper.readValue(obj2.toJson(), ApiInfo.class);
+                        allApiInfos.add(apiInfo);
+                        lastApiInfoKey = apiInfo.getId();
+                    }
+                } catch(Exception e) {
+                    loggerMaker.errorAndAddToDb("error extracting response in fetchApiRateLimits" + e, LoggerMaker.LogDb.RUNTIME);
+                }
+            } catch (Exception e) {
+                loggerMaker.errorAndAddToDb("error in fetchApiRateLimits" + e, LoggerMaker.LogDb.RUNTIME);
+            }
+        }
+        return allApiInfos;
+    }
+
     public List<ApiInfo> fetchNonTrafficApiInfos() {
         List<ApiInfo> apiInfos = new ArrayList<>();
 
@@ -1072,12 +1131,9 @@ public class ClientActor extends DataActor {
         obj.put("log", logObj);
         OriginalHttpRequest request = new OriginalHttpRequest(url + "/insertProtectionLog", "", "POST", obj.toString(), headers, "");
         try {
-            OriginalHttpResponse response = ApiExecutor.sendRequest(request, true, null, false, null);
-            String responsePayload = response.getBody();
-            if (response.getStatusCode() != 200 || responsePayload == null) {
-                System.out.println("non 2xx response in insertProtectionLog");
-                return;
-            }
+            logThreadPool.submit(
+                () -> ApiExecutor.sendRequest(request, true, null, false, null)
+            );
         } catch (Exception e) {
             System.out.println("error in insertProtectionLog" + e);
             return;
@@ -1271,7 +1327,11 @@ public class ClientActor extends DataActor {
 
     public Map<String, List<String>> buildHeaders() {
         Map<String, List<String>> headers = new HashMap<>();
-        headers.put("Authorization", Collections.singletonList(System.getenv("DATABASE_ABSTRACTOR_SERVICE_TOKEN")));
+        if(System.getProperty("DATABASE_ABSTRACTOR_SERVICE_TOKEN") != null){
+            headers.put("Authorization", Collections.singletonList(System.getProperty("DATABASE_ABSTRACTOR_SERVICE_TOKEN")));
+        }else{
+            headers.put("Authorization", Collections.singletonList(System.getenv("DATABASE_ABSTRACTOR_SERVICE_TOKEN")));
+        }
         return headers;
     }
 
@@ -1342,4 +1402,159 @@ public class ClientActor extends DataActor {
 
         return new HashSet<>(respList);
     }
+
+    public void bulkInsertApiHitCount(List<ApiHitCountInfo> payload) throws Exception {
+        BasicDBObject obj = new BasicDBObject();
+        obj.put("apiHitCountInfoList", payload);
+        String objString = gson.toJson(obj);
+        Map<String, List<String>> headers = buildHeaders();
+        OriginalHttpRequest request = new OriginalHttpRequest(url + "/bulkinsertApiHitCount", "", "POST", objString, headers, "");
+        try {
+            OriginalHttpResponse response = ApiExecutor.sendRequest(request, true, null, false, null);
+            if (response.getStatusCode() != 200) {
+                logger.error("non 2xx response in bulkInsertApiHitCount");
+                return;
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            logger.error("error in bulkInsertApiHitCount {}", e.getMessage());
+            throw e;
+        }
+    }
+
+    public void updateModuleInfo(ModuleInfo moduleInfo) {
+        Map<String, List<String>> headers = buildHeaders();
+        BasicDBObject obj = new BasicDBObject();
+        obj.put("moduleInfo", moduleInfo);
+
+        OriginalHttpRequest request = new OriginalHttpRequest(url + "/updateModuleInfoForHeartbeat", "", "POST", gson.toJson(obj), headers, "");
+        try {
+            OriginalHttpResponse response = ApiExecutor.sendRequestBackOff(request, true, null, false, null);
+            if (response.getStatusCode() != 200) {
+                loggerMaker.errorAndAddToDb("non 2xx response in updateModuleInfoForHeartbeat", LoggerMaker.LogDb.RUNTIME);
+                return;
+            }
+        } catch (Exception e) {
+            loggerMaker.errorAndAddToDb("error updating heartbeat for :" + moduleInfo.getModuleType().name(), LoggerMaker.LogDb.RUNTIME);
+        }
+    }
+
+    @Override
+    public List<ModuleInfo> fetchAndUpdateModuleForReboot(ModuleInfo.ModuleType moduleType, String miniRuntimeName) {
+        Map<String, List<String>> headers = buildHeaders();
+        BasicDBObject obj = new BasicDBObject();
+        obj.put("miniRuntimeName", miniRuntimeName);
+        obj.put("moduleType", moduleType != null ? moduleType.name() : null);
+
+        String requestPayload = gson.toJson(obj);
+        OriginalHttpRequest request = new OriginalHttpRequest(url + "/fetchAndUpdateModuleForReboot", "", "POST", requestPayload, headers, "");
+        try {
+            OriginalHttpResponse response = ApiExecutor.sendRequestBackOff(request, true, null, false, null);
+            String responsePayload = response.getBody();
+
+            if (response.getStatusCode() != 200 || responsePayload == null) {
+                loggerMaker.errorAndAddToDb("non 2xx response in fetchAndUpdateModuleForReboot: " + response.getStatusCode(), LoggerMaker.LogDb.RUNTIME);
+                return new ArrayList<>();
+            }
+
+            try {
+                ModuleInfo[] moduleInfoArray = objectMapper.readValue(responsePayload, ModuleInfo[].class);
+                if (moduleInfoArray == null) {
+                    return new ArrayList<>();
+                }
+                return Arrays.asList(moduleInfoArray);
+            } catch (Exception e) {
+                loggerMaker.errorAndAddToDb(e, "error parsing module info list from cyborg response", LoggerMaker.LogDb.RUNTIME);
+                return new ArrayList<>();
+            }
+        } catch (Exception e) {
+            loggerMaker.errorAndAddToDb(e, "error fetching and updating module for reboot", LoggerMaker.LogDb.RUNTIME);
+        }
+        return new ArrayList<>();
+    }
+
+    public String fetchOpenApiSchema(int apiCollectionId) {
+        Map<String, List<String>> headers = buildHeaders();
+        BasicDBObject obj = new BasicDBObject();
+        obj.put("apiCollectionId", apiCollectionId);
+        String openApiSchema = null;
+        OriginalHttpRequest request = new OriginalHttpRequest(url + "/fetchOpenApiSchema", "", "POST", obj.toString(), headers, "");
+        try {
+            OriginalHttpResponse response = ApiExecutor.sendRequest(request, true, null, false, null);
+            String responsePayload = response.getBody();
+            if (response.getStatusCode() != 200 || responsePayload == null) {
+                loggerMaker.errorAndAddToDb("non 2xx response in fetchOpenApiSchema", LoggerMaker.LogDb.RUNTIME);
+                return null;
+            }
+            BasicDBObject payloadObj;
+            try {
+                payloadObj =  BasicDBObject.parse(responsePayload);
+                openApiSchema = payloadObj.get("openApiSchema").toString();
+            } catch(Exception e) {
+                return openApiSchema;
+            }
+        } catch (Exception e) {
+            loggerMaker.errorAndAddToDb("error in fetchOpenApiSchema" + e, LoggerMaker.LogDb.RUNTIME);
+        }
+        return openApiSchema;
+    }
+
+    public void insertDataIngestionLog(Log log) {
+        Map<String, List<String>> headers = buildHeaders();
+        BasicDBObject obj = new BasicDBObject();
+        obj.put("log", log.getLog());
+        obj.put("key", log.getKey());
+        obj.put("timestamp", log.getTimestamp());
+        BasicDBObject logObj = new BasicDBObject();
+        logObj.put("log", obj);
+        OriginalHttpRequest request = new OriginalHttpRequest(url + "/insertDataIngestionLog", "", "POST", logObj.toString(), headers, "");
+        try {
+            OriginalHttpResponse response = ApiExecutor.sendRequest(request, true, null, false, null);
+            String responsePayload = response.getBody();
+            if (response.getStatusCode() != 200 || responsePayload == null) {
+                loggerMaker.errorAndAddToDb("non 2xx response in insertDataIngestionLog", LogDb.DATA_INGESTION);
+                return;
+            }
+        } catch (Exception e) {
+            loggerMaker.errorAndAddToDb("error in insertDataIngestionLog" + e, LogDb.DATA_INGESTION);
+            return;
+        }
+    }
+
+    public List<ApiCollection> fetchAllApiCollections() {
+        Map<String, List<String>> headers = buildHeaders();
+        List<ApiCollection> apiCollections = new ArrayList<>();
+        loggerMaker.infoAndAddToDb("fetchAllApiCollections api called ", LoggerMaker.LogDb.RUNTIME);
+        OriginalHttpRequest request = new OriginalHttpRequest(url + "/fetchAllApiCollections", "", "POST", null, headers, "");
+        try {
+            OriginalHttpResponse response = ApiExecutor.sendRequestBackOff(request, true, null, false, null);
+            String responsePayload = response.getBody();
+            if (response.getStatusCode() != 200 || responsePayload == null) {
+                loggerMaker.errorAndAddToDb("invalid response in fetchAllApiCollections", LoggerMaker.LogDb.RUNTIME);
+            }
+            BasicDBObject payloadObj;
+            try {
+                payloadObj =  BasicDBObject.parse(responsePayload);
+
+                BasicDBList apiCollectionList = (BasicDBList) payloadObj.get("apiCollections");
+
+                for (Object obj: apiCollectionList) {
+                    BasicDBObject aObj = (BasicDBObject) obj;
+                    aObj.remove("displayName");
+                    aObj.remove("urlsCount");
+                    aObj.remove("envType");
+                    aObj.remove("tagsList");
+                    ApiCollection col = objectMapper.readValue(aObj.toJson(), ApiCollection.class);
+                    apiCollections.add(col);
+                }
+            } catch(Exception e) {
+                loggerMaker.errorAndAddToDb("error extracting response in fetchApiCollections" + e, LoggerMaker.LogDb.RUNTIME);
+            }
+        } catch (Exception e) {
+            loggerMaker.errorAndAddToDb("error in fetchApiCollections" + e, LoggerMaker.LogDb.RUNTIME);
+        }
+        loggerMaker.infoAndAddToDb("fetchAllApiCollections api called size " + apiCollections.size(), LoggerMaker.LogDb.RUNTIME);
+        return apiCollections;
+    }
+
 }

@@ -1,5 +1,5 @@
 import { Box, Button, DataTable, Divider, Modal, Text, TextField, Icon, Checkbox, Badge, Banner, HorizontalStack, Link, VerticalStack, Tooltip, Popover, OptionList, ButtonGroup } from "@shopify/polaris";
-import { TickMinor, CancelMajor, SearchMinor, NoteMinor, AppsFilledMajor } from "@shopify/polaris-icons";
+import { TickMinor, CancelMajor, SearchMinor, NoteMinor, AppsFilledMajor, MagicMajor } from "@shopify/polaris-icons";
 import api, { default as observeApi } from "../api";
 import { useEffect, useReducer, useRef, useState } from "react";
 import { default as testingApi } from "../../testing/api";
@@ -10,19 +10,31 @@ import PersistStore from "../../../../main/PersistStore";
 import transform from "../../testing/transform";
 import LocalStore from "../../../../main/LocalStorageStore";
 import AdvancedSettingsComponent from "./component/AdvancedSettingsComponent";
+import { mapLabel, getDashboardCategory } from "../../../../main/labelHelper";
 
 import { produce } from "immer"
 import RunTestSuites from "./RunTestSuites";
 import RunTestConfiguration from "./RunTestConfiguration";
-import createTestName from "./Utils"
+import {createTestName,convertToLowerCaseWithUnderscores} from "./Utils"
+import settingsApi from "../../settings/api";
+import {getCategoriesBasedOnDashboardCategory, filterSubCategoriesBasedOnCategories } from "../../test_editor/tests_table/categoryUtil";
 
-function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOutside, closeRunTest, selectedResourcesForPrimaryAction, useLocalSubCategoryData, preActivator, testIdConfig, activeFromTesting, setActiveFromTesting, showEditableSettings, setShowEditableSettings, parentAdvanceSettingsConfig, testRunType }) {
+const initialAutoTicketingDetails = {
+    shouldCreateTickets: false,
+    projectId: "",
+    severities: [],
+    issueType: "",
+}
+
+function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOutside, closeRunTest, selectedResourcesForPrimaryAction, useLocalSubCategoryData, preActivator, testIdConfig, activeFromTesting, setActiveFromTesting, showEditableSettings, setShowEditableSettings, parentAdvanceSettingsConfig, testRunType, shouldDisable }) {
 
     const initialState = {
         categories: [],
         tests: {},
         selectedCategory: "BOLA",
         recurringDaily: false,
+        recurringWeekly: false,
+        recurringMonthly: false,
         continuousTesting: false,
         overriddenTestAppUrl: "",
         hasOverriddenTestAppUrl: false,
@@ -38,7 +50,11 @@ function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOu
         testRoleId: "",
         sendSlackAlert: false,
         sendMsTeamsAlert: false,
-        cleanUpTestingResources: false
+        cleanUpTestingResources: false,
+        doNotMarkIssuesAsFixed: false,
+        autoTicketingDetails: initialAutoTicketingDetails,
+        miniTestingServiceName: "",
+        slackChannel: ""
     }
     const navigate = useNavigate()
 
@@ -72,21 +88,29 @@ function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOu
     const [slackIntegrated, setSlackIntegrated] = useState(false)
     const [teamsTestingWebhookIntegrated, setTeamsTestingWebhookIntegrated] = useState(false)
 
-    const emptyCondition = { data: { key: '', value: '' }, operator: { 'type': 'ADD_HEADER' } }
+    const [miniTestingServiceNames, setMiniTestingServiceNames] = useState([])
+    const [slackChannels, setSlackChannels] = useState([])
     const [conditions, dispatchConditions] = useReducer(produce((draft, action) => func.conditionsReducer(draft, action)), []);
 
     const localCategoryMap = LocalStore.getState().categoryMap
+    const dashboardCategory = getDashboardCategory();
     const localSubCategoryMap = LocalStore.getState().subCategoryMap
     const [testMode, setTestMode] = useState(true)
     const [shouldRuntestConfig, setShouldRuntestConfig] = useState(false)
 
     const [openConfigurations, openConfigurationsToggle] = useState(false);
 
+    const [testSuiteIds, setTestSuiteIds] = useState([])
+
+    const [testNameSuiteModal, setTestNameSuiteModal] = useState("")
+    const [jiraProjectMap, setJiraProjectMap] = useState(null);
+    const isAgenticCategory = getDashboardCategory() !== 'API Security'
+    const [agenticMode, setAgenticMode] = useState(false)
+
     useEffect(() => {
         if (preActivator) {
             setParentActivator(true);
         }
-
     }, [testMode])
 
     const apiCollectionName = collectionsMap[apiCollectionId]
@@ -94,18 +118,33 @@ function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOu
     async function fetchData() {
         setLoading(true)
 
-        observeApi.fetchSlackWebhooks().then((resp) => {
-            const apiTokenList = resp.apiTokenList
-            setSlackIntegrated(apiTokenList && apiTokenList.length > 0)
-        })
+        Promise.all([
+            observeApi.fetchSlackWebhooks(),
+            observeApi.checkWebhook("MICROSOFT_TEAMS", "TESTING_RUN_RESULTS"),
+            settingsApi.fetchJiraIntegration()]).then(([slackResp, teamsResp, jiraResp]) => {
+                const apiTokenList = slackResp.apiTokenList
+                setSlackIntegrated(apiTokenList && apiTokenList.length > 0)
+                setSlackChannels(apiTokenList.map(token => {
+                    let slackName = token.name;
+                        // Check if name is missing or is a URL
+                        if (!slackName ) {
+                            slackName = 'Slack Webhook';
+                        } else if ( /^https?:\/\//i.test(slackName)){
+                            slackName = token.name.replace(/^https?:\/\//i, '').replace(/\/$/, '');
+                        }
+                        return {
+                            label: slackName,
+                            value: token.id
+                        }
+                }))
 
-        observeApi.checkWebhook("MICROSOFT_TEAMS", "TESTING_RUN_RESULTS").then((resp) => {
-            // console.log(resp.webhookPresent, resp)
-            const webhookPresent = resp.webhookPresent
-            if(webhookPresent){
-                setTeamsTestingWebhookIntegrated(true)
-            }
-        })
+                const webhookPresent = teamsResp.webhookPresent
+                if (webhookPresent) {
+                    setTeamsTestingWebhookIntegrated(true)
+                }
+
+                setJiraProjectMap(jiraResp?.projectIdsMap || null);
+            })
 
         let metaDataObj = {
             categories: [],
@@ -123,7 +162,11 @@ function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOu
         } else {
             metaDataObj = await transform.getAllSubcategoriesData(true, "runTests")
         }
+        let categoriesName = getCategoriesBasedOnDashboardCategory(dashboardCategory, localCategoryMap);
+        metaDataObj.subCategories = filterSubCategoriesBasedOnCategories(metaDataObj.subCategories, categoriesName);
         let categories = metaDataObj.categories
+        categories = func.sortByCategoryPriority(categories, 'name')
+        const categoriesNames = categories.map(category => category.name)
         let businessLogicSubcategories = metaDataObj.subCategories.filter((subCategory) => {return !subCategory.inactive})
         const testRolesResponse = await testingApi.fetchTestRoles()
         var testRoles = testRolesResponse.testRoles.map(testRole => {
@@ -144,25 +187,42 @@ function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOu
         }
 
         Object.keys(processMapCategoryToSubcategory).map(category => {
-            const selectedTests = []
+            if(categoriesNames.includes(category)){
+                const selectedTests = []
 
-            mapCategoryToSubcategory[category]["selected"].map(test => selectedTests.push(test.value))
-            processMapCategoryToSubcategory[category].forEach((test, index, arr) => {
-                arr[index]["selected"] = selectedTests.includes(test.value)
-            })
+                mapCategoryToSubcategory[category]["selected"].map(test => selectedTests.push(test.value))
+                processMapCategoryToSubcategory[category].forEach((test, index, arr) => {
+                    arr[index]["selected"] = selectedTests.includes(test.value)
+                })
+            }else{
+                delete processMapCategoryToSubcategory[category];
+            }
+            
         })
         const testName = createTestName(apiCollectionName, processMapCategoryToSubcategory);
+        // determine selectedCategory based on the same priority ordering
+        const sortedCategoryKeys = func.sortByCategoryPriority(Object.keys(processMapCategoryToSubcategory))
         //Auth Mechanism
         let authMechanismPresent = false
         const authMechanismDataResponse = await testingApi.fetchAuthMechanismData()
         if (authMechanismDataResponse.authMechanism)
             authMechanismPresent = true
+            testingApi.fetchMiniTestingServiceNames().then(({miniTestingServiceNames}) => {
+            const miniTestingServiceNamesOptions = (miniTestingServiceNames || []).map(name => {
+                return {
+                    label: name,
+                    value: name
+                }
+            })
+            setMiniTestingServiceNames(miniTestingServiceNamesOptions)
+        })
+
         setTestRun(prev => {
             const state = {
                 ...prev,
                 categories: categories,
                 tests: processMapCategoryToSubcategory,
-                selectedCategory: Object.keys(processMapCategoryToSubcategory).length > 0 ? Object.keys(processMapCategoryToSubcategory)[0] : "",
+                selectedCategory: sortedCategoryKeys.length > 0 ? sortedCategoryKeys[0] : "",
                 testName: testName,
                 authMechanismPresent: authMechanismPresent
             };
@@ -170,6 +230,7 @@ function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOu
         });
         setLoading(false)
         setShouldRuntestConfig(true);
+        setTestNameSuiteModal(convertToLowerCaseWithUnderscores(apiCollectionName))
     }
 
     useEffect(() => {
@@ -179,11 +240,9 @@ function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOu
         }
     }, [apiCollectionName, runTestFromOutside])
 
-
-
     useEffect(() => {
         if (shouldRuntestConfig === false) return;
-        if (testIdConfig?.testingRunConfig?.testSubCategoryList?.length > 0) {
+        if (testIdConfig?.testingRunConfig?.testSubCategoryList?.length >= 0) {
             const testSubCategoryList = [...testIdConfig.testingRunConfig.testSubCategoryList];
 
             const updatedTests = { ...testRun.tests };
@@ -203,12 +262,10 @@ function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOu
             });
 
                 handleAddSettings(parentAdvanceSettingsConfig);
-                const getRunTypeLabel = (runType) => {
-                    if (!runType) return "Once";
-                    if (runType === "CI-CD" || runType === "ONE_TIME") return "Once";
-                    else if (runType === "RECURRING") return "Daily";
-                    else if (runType === "CONTINUOUS_TESTING") return "Continuously";
-                }
+            
+                const hourOfTest = func.getHourFromEpoch(testIdConfig.scheduleTimestamp)
+                const hourLabel = func.getFormattedHoursUsingLabel(hourOfTest, hourlyTimes, nowLabel)
+
                 setTestRun(prev => ({
                     ...testRun,
                     tests: updatedTests,
@@ -218,19 +275,28 @@ function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOu
                     testRunTime: testIdConfig.testRunTime,
                     testRoleId: testIdConfig.testingRunConfig.testRoleId,
                     testRunTimeLabel: (testIdConfig.testRunTime === -1) ? "30 minutes" : getLabel(testRunTimeOptions, testIdConfig.testRunTime.toString())?.label,
-                    testRoleLabel: getLabel(testRolesArr, testIdConfig?.testingRunConfig?.testRoleId).label,
-                    runTypeLabel: getRunTypeLabel(testRunType),
+                    testRoleLabel: getLabel(testRolesArr, testIdConfig?.testingRunConfig?.testRoleId)?.label,
+                    runTypeLabel: func.getRunTypeLabel(testRunType, testIdConfig?.periodInSeconds),
                     testName: testIdConfig.name,
                     sendSlackAlert: testIdConfig?.sendSlackAlert,
                     sendMsTeamsAlert: testIdConfig?.sendMsTeamsAlert,
-                    recurringDaily: testIdConfig?.periodInSeconds === 86400,
-                    continuousTesting: testIdConfig?.periodInSeconds === -1
+                    recurringDaily: func.getRecurringContext(testIdConfig?.periodInSeconds) === "Daily",
+                    recurringMonthly: func.getRecurringContext(testIdConfig?.periodInSeconds) === "Monthly",
+                    recurringWeekly: func.getRecurringContext(testIdConfig?.periodInSeconds) === "Weekly",
+                    continuousTesting: func.getRecurringContext(testIdConfig?.periodInSeconds) === "Continuously",
+                    autoTicketingDetails: testIdConfig?.testingRunConfig?.autoTicketingDetails || initialAutoTicketingDetails,
+                    hourlyLabel: hourLabel.label,
+                    scheduleTimestamp: testIdConfig?.scheduleTimestamp,
+                    startTimestamp: testIdConfig?.scheduleTimestamp,
+                    runTypeParentLabel: testRunType,
+                    miniTestingServiceName: testIdConfig?.miniTestingServiceName || "",
+                    slackChannel: testIdConfig?.selectedSlackChannelId || 0,
                 }));
+                setTestSuiteIds(testIdConfig?.testingRunConfig?.testSuiteIds || [])
+                setTestNameSuiteModal(testIdConfig?.name||"")
         }
         setShouldRuntestConfig(false);
     }, [shouldRuntestConfig])
-
-
 
     const toggleRunTest = () => {
         if (activeFromTesting) {
@@ -260,12 +326,15 @@ function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOu
             if (!ret[x.superCategory.name]) {
                 ret[x.superCategory.name] = { selected: [], all: [] }
             }
-
+            
             let obj = {
                 label: x.testName,
                 value: x.name,
                 author: x.author,
-                nature: x?.attributes?.nature?._name || ""
+                nature: x?.attributes?.nature?._name || "",
+                severity: x?.superCategory?.severity?._name || "",
+                duration: x?.attributes?.duration?._name || "",
+                estimatedTokens: 2 * x.estimatedTokens || 0
             }
             ret[x.superCategory.name].all.push(obj)
             ret[x.superCategory.name].selected.push(obj)
@@ -279,7 +348,7 @@ function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOu
 
     const activator = (
         <div ref={runTestRef}>
-            <Button onClick={toggleRunTest} primary disabled={disabled || testRun.selectedCategory.length === 0} ><div data-testid="run_test_button">Run test</div></Button>
+            <Button onClick={toggleRunTest} primary disabled={disabled || testRun.selectedCategory.length === 0} ><div data-testid="run_test_button">{mapLabel('Run test', getDashboardCategory())}</div></Button>
         </div>
     );
 
@@ -383,10 +452,13 @@ function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOu
         testRows = filteredTests.map(test => {
             const isCustom = test?.author !== "AKTO"
             const label = (
-                <span style={{ display: 'flex', gap: '4px', alignItems: 'flex-start' }}>
-                    <Text variant="bodyMd">{test.label}</Text>
-                    {isCustom ? <Box paddingBlockStart={"050"}><Badge status="warning" size="small">Custom</Badge></Box> : null}
-                </span>
+                <VerticalStack gap="1">
+                    <HorizontalStack gap="1" blockAlign="start" wrap>
+                        <Text variant="bodyMd">{test.label}</Text>
+                        {isCustom ? <Badge status="warning" size="small">Custom</Badge> : null}
+                        {test.estimatedTokens > 0 ? <Badge status="info" size="small">~{test.estimatedTokens.toLocaleString()} tokens</Badge> : null}
+                    </HorizontalStack>
+                </VerticalStack>
             )
             return ([(
                 <Checkbox
@@ -402,15 +474,16 @@ function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOu
     const hours = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 
     const amTimes = hours.map(hour => {
-        let hourStr = hour + (hour == 12 ? " noon" : " am")
+        let hourStr = hour + (hour === 12 ? " noon" : " am")
         return { label: hourStr, value: hour.toString() }
     })
     const pmTimes = hours.map(hour => {
-        let hourStr = hour + (hour == 12 ? " midnight" : " pm")
+        let hourStr = hour + (hour === 12 ? " midnight" : " pm")
         return { label: hourStr, value: `${hour + 12}` }
     })
 
-    const hourlyTimes = [{ label: "Now", value: "Now" }, ...amTimes, ...pmTimes]
+    const nowLabel = { label: "Now", value: "Now" }
+    const hourlyTimes = [nowLabel, ...amTimes, ...pmTimes]
 
     const runTimeMinutes = hours.reduce((abc, x) => {
         if (x < 6) {
@@ -430,7 +503,7 @@ function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOu
 
     const testRunTimeOptions = [...runTimeMinutes, ...runTimeHours]
 
-    const runTypeOptions = [{ label: "Daily", value: "Daily" }, { label: "Continuously", value: "Continuously" }, { label: "Once", value: "Once" }]
+    const runTypeOptions = [{ label: "Daily", value: "Daily" }, {label: 'Weekly',value: 'Weekly'}, {label: 'Monthly', value: 'Monthly'}, { label: "Continuously", value: "Continuously" }, { label: "Once", value: "Once" }]
 
     const maxRequests = hours.reduce((abc, x) => {
         if (x < 11) {
@@ -446,7 +519,12 @@ function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOu
         if (testRun.hourlyLabel === "Now") {
             if (testRun.recurringDaily) {
                 return <div data-testid="schedule_run_button">Run daily at this time</div>
-            } else if (testRun.continuousTesting) {
+            } else if (testRun.recurringWeekly) {
+                return <div data-testid="schedule_run_button">Run weekly at this time</div>
+            } else if (testRun.recurringMonthly) {
+                return <div data-testid="schedule_run_button">Run monthly at this time</div>
+            }
+            else if (testRun.continuousTesting) {
                 return <div data-testid="schedule_run_button">Run continuous testing</div>
             } else {
                 return <div data-testid="schedule_run_button">Run once {func.prettifyFutureEpoch(testRun.startTimestamp)}</div>
@@ -454,9 +532,12 @@ function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOu
         } else {
             if (testRun.recurringDaily) {
                 return <div data-testid="schedule_run_button">Run daily at {testRun.hourlyLabel}</div>
-
-            } else {
-                return <div data-testid="schedule_run_button">Run once at {func.prettifyFutureEpoch(testRun.startTimestamp)}</div>
+            } else if (testRun.recurringWeekly) {
+                return <div data-testid="schedule_run_button">Run weekly on every {func.getDayOfWeek(testRun.startTimestamp)} at {testRun.hourlyLabel}</div>
+            } else if (testRun.recurringMonthly) {
+                return <div data-testid="schedule_run_button">Run monthly on every {new Date(testRun.startTimestamp * 1000).getDate()} at {testRun.hourlyLabel}</div>
+            }else {
+                return <div data-testid="schedule_run_button">Run once on {new Date(testRun.startTimestamp * 1000).getDate()} at {testRun.hourlyLabel}</div>
             }
         }
     }
@@ -487,17 +568,24 @@ function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOu
     }
 
     async function handleRun() {
-        const { startTimestamp, recurringDaily, testName, testRunTime, maxConcurrentRequests, overriddenTestAppUrl, testRoleId, continuousTesting, sendSlackAlert, sendMsTeamsAlert, cleanUpTestingResources } = testRun
+        const { startTimestamp, recurringDaily, recurringMonthly, recurringWeekly, testRunTime, maxConcurrentRequests, overriddenTestAppUrl, testRoleId, continuousTesting, sendSlackAlert, sendMsTeamsAlert, cleanUpTestingResources, miniTestingServiceName, slackChannel, doNotMarkIssuesAsFixed } = testRun
+        let {testName} = testRun;
+        const autoTicketingDetails = jiraProjectMap ? testRun.autoTicketingDetails : null;
         const collectionId = parseInt(apiCollectionId)
 
         const tests = testRun.tests
 
-        const selectedTests = []
-        Object.keys(tests).forEach(category => {
-            tests[category].forEach(test => {
-                if (test.selected) selectedTests.push(test.value)
+        let selectedTests = []
+        if (testMode) {
+            Object.keys(tests).forEach(category => {
+                tests[category].forEach(test => {
+                    if (test.selected) selectedTests.push(test.value)
+                })
             })
-        })
+        }
+        else {
+            testName = testNameSuiteModal
+        }
 
         let apiInfoKeyList;
         if (!selectedResourcesForPrimaryAction || selectedResourcesForPrimaryAction.length === 0) {
@@ -523,14 +611,14 @@ function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOu
         }
         let finalAdvancedConditions = []
 
-        if (conditions.length > 0 && conditions[0]?.data?.key?.length > 0) {
+        if (conditions.length > 0 && (conditions[0]?.data?.key?.length > 0 || conditions[0]?.data?.position?.length > 0)) {
             finalAdvancedConditions = transform.prepareConditionsForTesting(conditions)
         }
 
         if (filtered || selectedResourcesForPrimaryAction?.length > 0) {
-            await observeApi.scheduleTestForCustomEndpoints(apiInfoKeyList, startTimestamp, recurringDaily, selectedTests, testName, testRunTime, maxConcurrentRequests, overriddenTestAppUrl, "TESTING_UI", testRoleId, continuousTesting, sendSlackAlert, sendMsTeamsAlert, finalAdvancedConditions, cleanUpTestingResources)
+            await observeApi.scheduleTestForCustomEndpoints(apiInfoKeyList, startTimestamp, recurringDaily, recurringWeekly, recurringMonthly, selectedTests, testName, testRunTime, maxConcurrentRequests, overriddenTestAppUrl, "TESTING_UI", testRoleId, continuousTesting, sendSlackAlert, sendMsTeamsAlert, finalAdvancedConditions, cleanUpTestingResources, testMode? []: testSuiteIds, (miniTestingServiceName || miniTestingServiceNames?.[0]?.value), (slackChannel || slackChannels?.[0]?.value) ,autoTicketingDetails, doNotMarkIssuesAsFixed)
         } else {
-            await observeApi.scheduleTestForCollection(collectionId, startTimestamp, recurringDaily, selectedTests, testName, testRunTime, maxConcurrentRequests, overriddenTestAppUrl, testRoleId, continuousTesting, sendSlackAlert, sendMsTeamsAlert, finalAdvancedConditions, cleanUpTestingResources)
+            await observeApi.scheduleTestForCollection(collectionId, startTimestamp, recurringDaily, recurringWeekly, recurringMonthly, selectedTests, testName, testRunTime, maxConcurrentRequests, overriddenTestAppUrl, testRoleId, continuousTesting, sendSlackAlert, sendMsTeamsAlert, finalAdvancedConditions, cleanUpTestingResources, testMode? []: testSuiteIds, (miniTestingServiceName || miniTestingServiceNames?.[0]?.value), (slackChannel || slackChannels?.[0]?.value), autoTicketingDetails, doNotMarkIssuesAsFixed)
         }
 
         setActive(false)
@@ -580,6 +668,20 @@ function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOu
         return count;
     }
 
+    function computeTokenEstimation() {
+        let totalTokens = 0;
+        const tests = { ...testRun.tests };
+        Object.keys(tests).forEach(category => {
+            (tests[category] || []).filter(t => t.selected && t.estimatedTokens > 0).forEach(t => {
+                totalTokens += t.estimatedTokens;
+            });
+        });
+        const totalApis = endpoints ? endpoints.length : 0;
+        return totalTokens * totalApis;
+    }
+
+    const estimatedTotalTokens = computeTokenEstimation();
+
     function toggleTestsSelection(val) {
         let copyTestRun = testRun
         copyTestRun.tests[testRun.selectedCategory].forEach((test) => {
@@ -620,14 +722,29 @@ function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOu
         );
     }
 
-    const handleButtonClick = (check) => {
-        setTestMode(check);
+    function generateLabelForJiraIntegration() {
+        return (
+            <HorizontalStack gap={1}>
+                {!jiraProjectMap && <Link url='/dashboard/settings/integrations/jira' target="_blank" rel="noopener noreferrer" style={{ color: "#3385ff", textDecoration: 'none' }}>
+                    Enable
+                </Link>}
+                <Text>
+                    Auto-create tickets
+                </Text>
+            </HorizontalStack>
+        )
     }
 
-    // only for configurations 
+    const handleButtonClick = (check) => {
+        setTestMode(check);
+        setAgenticMode(false);
+    }
+
+    // only for configurations
     const handleModifyConfig = async () => {
         const settings = transform.prepareConditionsForTesting(conditions)
-        const editableConfigObject = transform.prepareEditableConfigObject(testRun, settings, testIdConfig.hexId)
+        let autoTicketingDetails = jiraProjectMap? testRun.autoTicketingDetails : null;
+        const editableConfigObject = transform.prepareEditableConfigObject(testRun, settings, testIdConfig.hexId,testSuiteIds,autoTicketingDetails)
         await testingApi.modifyTestingRunConfig(testIdConfig?.testingRunConfig?.id, editableConfigObject).then(() => {
             func.setToast(true, false, "Modified testing run config successfully")
             setShowEditableSettings(false)
@@ -651,6 +768,27 @@ function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOu
         }
     }
 
+    const RunTestConfigurationComponent = (
+        <RunTestConfiguration
+            timeFieldsDisabled={shouldDisable}
+            testRun={testRun}
+            setTestRun={setTestRun}
+            runTypeOptions={runTypeOptions}
+            hourlyTimes={hourlyTimes}
+            testRunTimeOptions={testRunTimeOptions}
+            testRolesArr={testRolesArr}
+            maxConcurrentRequestsOptions={maxConcurrentRequestsOptions}
+            slackIntegrated={slackIntegrated}
+            teamsTestingWebhookIntegrated={teamsTestingWebhookIntegrated}
+            generateLabelForSlackIntegration={generateLabelForSlackIntegration}
+            generateLabelForTeamsIntegration={generateLabelForTeamsIntegration}
+            getLabel={getLabel}
+            jiraProjectMap={jiraProjectMap}
+            generateLabelForJiraIntegration={generateLabelForJiraIntegration}
+            miniTestingServiceNames={miniTestingServiceNames}
+            slackChannels={slackChannels}
+        />
+    )
 
     const editableConfigsComp = (
         <Modal
@@ -666,21 +804,7 @@ function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOu
         >
             <Modal.Section>
                 <>
-                    <RunTestConfiguration
-                        timeFieldsDisabled={showEditableSettings || activeFromTesting}
-                        testRun={testRun}
-                        setTestRun={setTestRun}
-                        runTypeOptions={runTypeOptions}
-                        hourlyTimes={hourlyTimes}
-                        testRunTimeOptions={testRunTimeOptions}
-                        testRolesArr={testRolesArr}
-                        maxConcurrentRequestsOptions={maxConcurrentRequestsOptions}
-                        slackIntegrated={slackIntegrated}
-                        teamsTestingWebhookIntegrated={teamsTestingWebhookIntegrated}
-                        generateLabelForSlackIntegration={generateLabelForSlackIntegration}
-                        generateLabelForTeamsIntegration={generateLabelForTeamsIntegration}
-                        getLabel={getLabel}
-                    />
+                    {RunTestConfigurationComponent}
                     <AdvancedSettingsComponent dispatchConditions={dispatchConditions} conditions={conditions} />
                 </>
             </Modal.Section>
@@ -696,20 +820,21 @@ function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOu
                 activator={runTestRef}
                 open={active || activeFromTesting}
                 onClose={toggleRunTest}
-                title={<HorizontalStack gap={4}><Text as="h2" fontWeight="semibold">Configure test</Text>
+                title={<HorizontalStack gap={4}><Text as="h2" fontWeight="semibold">{ "Configure " + mapLabel("test", getDashboardCategory())}</Text>
                     <ButtonGroup segmented>
-                        <Button monochrome pressed={testMode} icon={NoteMinor} onClick={() => handleButtonClick(true)}></Button>
-                        <Button monochrome pressed={!testMode} icon={AppsFilledMajor} onClick={() => handleButtonClick(false)}></Button>
+                        <Button monochrome pressed={testMode && !agenticMode} icon={NoteMinor} onClick={() => handleButtonClick(true)}></Button>
+                        <Button monochrome pressed={!testMode && !agenticMode} icon={AppsFilledMajor} onClick={() => handleButtonClick(false)}></Button>
+                        {isAgenticCategory && <Button monochrome pressed={agenticMode} icon={MagicMajor} onClick={() => {setAgenticMode(true); setTestMode(false)}}></Button>}
                     </ButtonGroup>
                 </HorizontalStack>}
                 primaryAction={{
                     content: activeFromTesting ? "Save" : scheduleString(),
                     onAction: activeFromTesting ? handleModifyConfig : handleRun,
-                    disabled: (countAllSelectedTests() === 0) || !testRun.authMechanismPresent
+                    disabled: (testMode && activeFromTesting && (testSuiteIds.length !== 0)) || (countAllSelectedTests() === 0 && testSuiteIds.length === 0  ) || !testRun.authMechanismPresent
                 }}
                 secondaryActions={[
-                    countAllSelectedTests() ? {
-                        content: `${countAllSelectedTests()} tests selected`,
+                    countAllSelectedTests() && testMode ? {
+                        content: `${countAllSelectedTests()} ${mapLabel("tests selected", getDashboardCategory())}` ,
                         disabled: true,
                         plain: true,
                     } : null,
@@ -722,7 +847,7 @@ function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOu
 
                 large
 
-                footer={testMode ? null : openConfigurations ? <Button onClick={() => openConfigurationsToggle(false)} plain><Text as="p" fontWeight="regular">Go back to test selection</Text></Button> : <Button onClick={() => openConfigurationsToggle(true)} plain><Text as="p" fontWeight="regular">Change Configurations</Text></Button>}
+                footer={testMode || agenticMode ? null : openConfigurations ? <Button onClick={() => openConfigurationsToggle(false)} plain><Text as="p" fontWeight="regular">Go back to test selection</Text></Button> : <Button onClick={() => openConfigurationsToggle(true)} plain><Text as="p" fontWeight="regular">Change Configurations</Text></Button>}
             >
                 {loading ? <SpinnerCentered /> :
                     testMode ?
@@ -840,54 +965,53 @@ function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOu
                                         </div>
                                     </div>
                                 </div>
-                                <RunTestConfiguration
-                                    timeFieldsDisabled={showEditableSettings || activeFromTesting}
-                                    testRun={testRun}
-                                    setTestRun={setTestRun}
-                                    runTypeOptions={runTypeOptions}
-                                    hourlyTimes={hourlyTimes}
-                                    testRunTimeOptions={testRunTimeOptions}
-                                    testRolesArr={testRolesArr}
-                                    maxConcurrentRequestsOptions={maxConcurrentRequestsOptions}
-                                    slackIntegrated={slackIntegrated}
-                                    teamsTestingWebhookIntegrated={teamsTestingWebhookIntegrated}
-                                    generateLabelForSlackIntegration={generateLabelForSlackIntegration}
-                                    generateLabelForTeamsIntegration={generateLabelForTeamsIntegration}
-                                    getLabel={getLabel}
-                                />
-
+                                {estimatedTotalTokens > 0 && (
+                                    <Box paddingBlockStart="2">
+                                        <HorizontalStack align="end" gap="1">
+                                            <Text variant="bodySm" color="subdued">Estimated Usage:</Text>
+                                            <Text variant="bodySm" fontWeight="semibold">~{estimatedTotalTokens.toLocaleString()} tokens</Text>
+                                        </HorizontalStack>
+                                    </Box>
+                                )}
+                                {RunTestConfigurationComponent}
                             </VerticalStack>
                             <AdvancedSettingsComponent dispatchConditions={dispatchConditions} conditions={conditions} />
 
-                        </Modal.Section> : <Modal.Section>
+                        </Modal.Section> : 
+                        !agenticMode ? <Modal.Section>
                             {!openConfigurations ? <RunTestSuites
                                 testRun={testRun}
                                 setTestRun={setTestRun}
-                                handleRun={handleRun}
                                 handleRemoveAll={handleRemoveAll}
                                 apiCollectionName={apiCollectionName}
                                 setTestMode={setTestMode}
                                 activeFromTesting={activeFromTesting}
-                                checkRemoveAll={checkRemoveAll} handleModifyConfig={handleModifyConfig} /> :
+                                checkRemoveAll={checkRemoveAll} handleModifyConfig={handleModifyConfig}
+                                setTestSuiteIds={setTestSuiteIds} testSuiteIds={testSuiteIds}
+                                testNameSuiteModal={testNameSuiteModal}
+                                setTestNameSuiteModal={setTestNameSuiteModal}/> :
                                 <>
-                                    <RunTestConfiguration
-                                        timeFieldsDisabled={showEditableSettings || activeFromTesting}
-                                        testRun={testRun}
-                                        setTestRun={setTestRun}
-                                        runTypeOptions={runTypeOptions}
-                                        hourlyTimes={hourlyTimes}
-                                        testRunTimeOptions={testRunTimeOptions}
-                                        testRolesArr={testRolesArr}
-                                        maxConcurrentRequestsOptions={maxConcurrentRequestsOptions}
-                                        slackIntegrated={slackIntegrated}
-                                        teamsTestingWebhookIntegrated={teamsTestingWebhookIntegrated}
-                                        generateLabelForSlackIntegration={generateLabelForSlackIntegration}
-                                        generateLabelForTeamsIntegration={generateLabelForTeamsIntegration}
-                                        getLabel={getLabel}
-                                    />
+                                    {RunTestConfigurationComponent}
                                     <AdvancedSettingsComponent dispatchConditions={dispatchConditions} conditions={conditions} />
                                 </>
                             }
+                        </Modal.Section>
+                        : <Modal.Section>
+                            <VerticalStack gap={"3"}>
+                                <HorizontalStack gap={"3"} align="start" wrap={false}>
+                                    <Text variant="headingMd">Name:</Text>
+                                    <div style={{ width: "60%" }}>
+                                        <TextField
+                                            placeholder="Enter test name"
+                                            value={testRun.testName}
+                                            disabled={activeFromTesting}
+                                            onChange={(testName) => setTestRun(prev => ({ ...prev, testName: testName }))}
+                                        />
+                                    </div>
+                                </HorizontalStack>
+                                {RunTestConfigurationComponent}
+                                <AdvancedSettingsComponent dispatchConditions={dispatchConditions} conditions={conditions} />
+                            </VerticalStack>
                         </Modal.Section>
                 }
             </Modal>

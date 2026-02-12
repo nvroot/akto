@@ -4,10 +4,12 @@ import com.akto.action.UserAction;
 import com.akto.dao.*;
 import com.akto.dao.context.Context;
 import com.akto.dao.filter.MergedUrlsDao;
+import com.akto.dao.testing_run_findings.TestingRunIssuesDao;
 import com.akto.dto.*;
 import com.akto.dto.ApiInfo.ApiInfoKey;
 import com.akto.dto.CodeAnalysisApiInfo.CodeAnalysisApiInfoKey;
 import com.akto.dto.rbac.UsersCollectionsList;
+import com.akto.dto.testing.custom_groups.AllAPIsGroup;
 import com.akto.dto.filter.MergedUrls;
 import com.akto.dto.traffic.SampleData;
 import com.akto.dto.type.*;
@@ -22,6 +24,7 @@ import com.akto.parsers.HttpCallParser;
 import com.akto.runtime.APICatalogSync;
 import com.akto.runtime.Main;
 import com.akto.util.Constants;
+import com.akto.util.GroupByTimeRange;
 import com.akto.utils.AccountHTTPCallParserAktoPolicyInfo;
 import com.mongodb.BasicDBObject;
 import com.mongodb.client.MongoCursor;
@@ -35,6 +38,8 @@ import io.swagger.v3.oas.models.Paths;
 import io.swagger.v3.oas.models.servers.Server;
 import io.swagger.v3.parser.core.models.SwaggerParseResult;
 
+import lombok.Getter;
+import lombok.Setter;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 
@@ -56,6 +61,23 @@ public class InventoryAction extends UserAction {
     //     return Action.SUCCESS.toUpperCase();
     // }
 
+    @Getter
+    int notTestedEndpointsCount;
+
+    @Getter
+    int onlyOnceTestedEndpointsCount;
+
+    @Setter
+    private boolean showUrls;
+
+    @Getter
+    private List<ApiInfo> notTestedEndpointsApiInfo = new ArrayList<>();
+    @Setter
+    private boolean showApiInfo;
+
+    @Getter
+    private List<ApiInfo> onlyOnceTestedEndpointsApiInfo = new ArrayList<>();
+
 
     private static final LoggerMaker loggerMaker = new LoggerMaker(InventoryAction.class, LogDb.DASHBOARD);
 
@@ -65,10 +87,10 @@ public class InventoryAction extends UserAction {
         Bson filterStandardSensitiveParams = SingleTypeInfoDao.instance.filterForSensitiveParamsExcludingUserMarkedSensitive(apiCollectionId, url, method, subType);
 
         List<SingleTypeInfo> list = SingleTypeInfoDao.instance.findAll(filterStandardSensitiveParams, 0, LIMIT, null, Projections.exclude("values"));
-        return list;        
+        return list;
     }
 
-    private int startTimestamp = 0; 
+    private int startTimestamp = 0;
     private int endTimestamp = 0;
 
     Set<Integer> deactivatedCollections = UsageMetricCalculator.getDeactivated();
@@ -90,7 +112,7 @@ public class InventoryAction extends UserAction {
 
         ApiCollection juiceshopCollection = ApiCollectionsDao.instance.findByName("juice_shop_demo");
         if (juiceshopCollection != null) demoCollections.add(juiceshopCollection.getId());
-        
+
         newCount = SingleTypeInfoDao.instance.fetchEndpointsCount(0, endTimestamp, demoCollections);
         oldCount = SingleTypeInfoDao.instance.fetchEndpointsCount(0, startTimestamp, demoCollections);
         return SUCCESS.toUpperCase();
@@ -140,16 +162,33 @@ public class InventoryAction extends UserAction {
 
     public String fetchCollectionWiseApiEndpoints() {
         listOfEndpointsInCollection = new HashSet<>();
-        List<BasicDBObject> list = Utils.fetchEndpointsInCollectionUsingHost(apiCollectionId, skip);
+        List<BasicDBObject> list = new ArrayList<>();
+        if (apiCollectionId == -1) {
+            addActionError("API Collection ID cannot be -1");
+            return Action.ERROR.toUpperCase();
+        }
+        ApiCollection apiCollection = ApiCollectionsDao.instance.findOne(
+                Filters.eq(Constants.ID, apiCollectionId),
+                Projections.include(ApiCollection.HOST_NAME)
+        );
+        if(apiCollection == null) {
+            addActionError("No such collection exists");
+            return Action.ERROR.toUpperCase();
+        }
+        if(apiCollection.getHostName() == null || apiCollection.getHostName().isEmpty()) {
+            list = ApiCollectionsDao.fetchEndpointsInCollection(apiCollectionId, skip, Utils.LIMIT, Utils.DELTA_PERIOD_VALUE);
+        }else{
+            list = ApiCollectionsDao.fetchEndpointsInCollectionUsingHost(apiCollectionId, skip, false);
+        }
 
         if (list != null && !list.isEmpty()) {
             list.forEach(element -> {
                 BasicDBObject item = (BasicDBObject) element.get(Constants.ID);
-                    if (item == null) {
-                        return;
-                    }
+                if (item == null) {
+                    return;
+                }
                 ApiInfoKey apiInfoKey = new ApiInfoKey(
-                        apiCollectionId,
+                        item.getInt(ApiInfoKey.API_COLLECTION_ID),
                         item.getString(ApiInfoKey.URL),
                         Method.fromString(item.getString(ApiInfoKey.METHOD)));
                 listOfEndpointsInCollection.add(apiInfoKey);
@@ -292,31 +331,13 @@ public class InventoryAction extends UserAction {
         return unused;
     }
 
-    private void attachUnusedEndpoints(List<BasicDBObject> list,BasicDBObject response){
-        APISpec apiSpec = APISpecDao.instance.findById(apiCollectionId);
-        Set<String> unused = null;
-        try {
-            if (apiSpec != null) {
-                SwaggerParseResult result = new OpenAPIParser().readContents(apiSpec.getContent(), null, null);
-                OpenAPI openAPI = result.getOpenAPI();
-                unused = fetchSwaggerData(list, openAPI);
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        if (unused == null) {
-            unused = new HashSet<>();
-        }
-        response.put("unusedEndpoints", unused);
-    }
-
     private void attachCodeAnalysisInResponse(BasicDBObject response){
         BasicDBObject codeAnalysisCollectionInfo = new BasicDBObject();
         ApiCollection apiCollection = ApiCollectionsDao.instance.getMeta(apiCollectionId);
         CodeAnalysisCollection codeAnalysisCollection = null;
         if (apiCollection != null) {
             codeAnalysisCollection = CodeAnalysisCollectionDao.instance.findOne(
-                Filters.eq("name", apiCollection.getName())
+                    Filters.eq("name", apiCollection.getName())
             );
         }
         codeAnalysisCollectionInfo.put("codeAnalysisCollection", codeAnalysisCollection);
@@ -326,9 +347,9 @@ public class InventoryAction extends UserAction {
         if (codeAnalysisCollection != null) {
             List<CodeAnalysisApiInfo> codeAnalysisApiInfoList = CodeAnalysisApiInfoDao.instance.findAll(
                     Filters.eq("_id.codeAnalysisCollectionId", codeAnalysisCollection.getId()
-                )
+                    )
             );
-            
+
             for(CodeAnalysisApiInfo codeAnalysisApiInfo: codeAnalysisApiInfoList) {
                 CodeAnalysisApiInfoKey codeAnalysisApiInfoKey = codeAnalysisApiInfo.getId();
                 codeAnalysisApisMap.put(codeAnalysisApiInfoKey.getMethod() + " " + codeAnalysisApiInfoKey.getEndpoint(), codeAnalysisApiInfo);
@@ -346,24 +367,25 @@ public class InventoryAction extends UserAction {
 
     public String fetchApiInfosFromSTIs(){
         ApiCollection collection = ApiCollectionsDao.instance.findOne(
-            Filters.in(Constants.ID, apiCollectionId),
-            Projections.include(ApiCollection.HOST_NAME)
+                Filters.in(Constants.ID, apiCollectionId),
+                Projections.include(ApiCollection.HOST_NAME)
         );
         if(collection == null){
             addActionError("No such collection exists");
             return Action.ERROR.toUpperCase();
         }
         List<BasicDBObject> list = new ArrayList<>();
-        if(collection.getHostName() == null || collection.getHostName().isEmpty()){
-            Bson filter = Filters.and(
-                Filters.in(SingleTypeInfo._COLLECTION_IDS, apiCollectionId),
-                Filters.nin(SingleTypeInfo._API_COLLECTION_ID, deactivatedCollections)
-            );
+        if((collection.getHostName() == null || collection.getHostName().isEmpty()) && collection.getId() != AllAPIsGroup.ALL_APIS_GROUP_ID){
+            Bson filter = Filters.and(Filters.in(SingleTypeInfo._COLLECTION_IDS, apiCollectionId),
+                            Filters.nin(SingleTypeInfo._API_COLLECTION_ID, deactivatedCollections));
+            if (collection.getType() != null && !collection.getType().equals(ApiCollection.Type.API_GROUP)) {
+                filter = Filters.and(SingleTypeInfoDao.filterForHostHeader(0, false), filter);
+            }
             list = ApiCollectionsDao.fetchEndpointsInCollection(filter, 0, -1, Utils.DELTA_PERIOD_VALUE);
         }else{
-            list = Utils.fetchEndpointsInCollectionUsingHost(apiCollectionId, 0);
+            list = ApiCollectionsDao.fetchEndpointsInCollectionUsingHost(apiCollectionId, 0, collection.getId() == AllAPIsGroup.ALL_APIS_GROUP_ID);
         }
-         
+
         response = new BasicDBObject();
         response.put("list", list);
         return Action.SUCCESS.toUpperCase();
@@ -371,10 +393,10 @@ public class InventoryAction extends UserAction {
 
     public String fetchApiInfosForCollection(){
         List<ApiInfo> apiInfos = ApiInfoDao.instance.findAll(
-            Filters.and(
-                Filters.in(SingleTypeInfo._COLLECTION_IDS, apiCollectionId),
-                Filters.nin(ApiInfo.ID_API_COLLECTION_ID, deactivatedCollections)
-            ));
+                Filters.and(
+                        Filters.in(SingleTypeInfo._COLLECTION_IDS, apiCollectionId),
+                        Filters.nin(ApiInfo.ID_API_COLLECTION_ID, deactivatedCollections)
+                ));
         for(ApiInfo apiInfo: apiInfos){
             apiInfo.calculateActualAuth();
         }
@@ -389,28 +411,20 @@ public class InventoryAction extends UserAction {
         return Action.SUCCESS.toUpperCase();
     }
 
-    public String fetchAPICollection() {
-        List<BasicDBObject> list = Utils.fetchEndpointsInCollectionUsingHost(apiCollectionId, skip);
-        attachTagsInAPIList(list);
-        attachAPIInfoListInResponse(list, apiCollectionId);
-        attachUnusedEndpoints(list, response);
-
-        // Attach code analysis collection
-        attachCodeAnalysisInResponse(response);
-
-        return Action.SUCCESS.toUpperCase();
-    }
-
     private List<String> urls;
     public String fetchSensitiveParamsForEndpoints() {
+
+        if (urls == null || urls.isEmpty()){
+            return Action.SUCCESS.toUpperCase();
+        }
 
         int batchSize = 500;
         List<SingleTypeInfo> list = new ArrayList<>();
         for (int i = 0; i < urls.size(); i += batchSize) {
             List<String> slice = urls.subList(i, Math.min(i+batchSize, urls.size()));
             Bson sensitiveFilters = SingleTypeInfoDao.instance.filterForSensitiveParamsExcludingUserMarkedSensitive(null, null, null, null);
-            Bson sensitiveFiltersWithUrls = 
-                Filters.and(Filters.in("url", slice), sensitiveFilters);
+            Bson sensitiveFiltersWithUrls =
+                    Filters.and(Filters.in("url", slice), sensitiveFilters);
             List<SingleTypeInfo> sensitiveSTIs = SingleTypeInfoDao.instance.findAll(sensitiveFiltersWithUrls, 0, 2000, null, Projections.exclude("values"));
             list.addAll(sensitiveSTIs);
         }
@@ -435,13 +449,13 @@ public class InventoryAction extends UserAction {
     public String getSummaryInfoForChanges(){
         long countEndpoints = SingleTypeInfoDao.instance.fetchEndpointsCount(startTimestamp, endTimestamp, deactivatedCollections);
         int countSensitiveApis = SingleTypeInfoDao.instance.getSensitiveApisCount(new ArrayList<>(), false, (
-            Filters.and(
-                    Filters.and(
-                        Filters.gte(SingleTypeInfo._TIMESTAMP, startTimestamp),
-                        Filters.lte(SingleTypeInfo._TIMESTAMP, endTimestamp)
-                    ),
-                    Filters.nin(SingleTypeInfo._API_COLLECTION_ID, deactivatedCollections)
-            )
+                Filters.and(
+                        Filters.and(
+                                Filters.gte(SingleTypeInfo._TIMESTAMP, startTimestamp),
+                                Filters.lte(SingleTypeInfo._TIMESTAMP, endTimestamp)
+                        ),
+                        Filters.nin(SingleTypeInfo._API_COLLECTION_ID, deactivatedCollections)
+                )
         ));
 
         response = new BasicDBObject();
@@ -456,8 +470,8 @@ public class InventoryAction extends UserAction {
         Bson searchFilter = Filters.empty();
         if(!regexPattern.isEmpty() && regexPattern.length() > 0){
             searchFilter = Filters.or(
-                Filters.regex(ApiInfo.ID_URL, regexPattern, "i"),
-                Filters.regex(ApiInfo.ID_METHOD, regexPattern, "i")
+                    Filters.regex(ApiInfo.ID_URL, regexPattern, "i"),
+                    Filters.regex(ApiInfo.ID_METHOD, regexPattern, "i")
             );
         }
         if(skip < 0){
@@ -495,11 +509,11 @@ public class InventoryAction extends UserAction {
 
         if (subType == null) {
             filterCustomSensitiveParams.add(Filters.eq("sensitive", true));
-            
+
             if (apiCollectionId != -1) {
                 Bson apiCollectionIdFilter = Filters.and(
-                    Filters.in(SingleTypeInfo._COLLECTION_IDS, apiCollectionId),
-                    Filters.nin(SingleTypeInfo._API_COLLECTION_ID, deactivatedCollections)
+                        Filters.in(SingleTypeInfo._COLLECTION_IDS, apiCollectionId),
+                        Filters.nin(SingleTypeInfo._API_COLLECTION_ID, deactivatedCollections)
                 );
                 filterCustomSensitiveParams.add(apiCollectionIdFilter);
             }
@@ -539,7 +553,7 @@ public class InventoryAction extends UserAction {
     public String fetchNewEndpointsTrendForHostCollections(){
         List <Integer> nonHostApiCollectionIds = ApiCollectionsDao.instance.fetchNonTrafficApiCollectionsIds();
         nonHostApiCollectionIds.addAll(deactivatedCollections);
-        
+
         Bson filterQWithTs = SingleTypeInfoDao.instance.getFilterForHostApis(startTimestamp, endTimestamp, deactivatedCollections, nonHostApiCollectionIds);
 
         List<Bson> pipeline = new ArrayList<>();
@@ -561,17 +575,17 @@ public class InventoryAction extends UserAction {
     public String fetchNewEndpointsTrendForNonHostCollections(){
         List <Integer> nonHostApiCollectionIds = ApiCollectionsDao.instance.fetchNonTrafficApiCollectionsIds();
         Bson nonHostFilterWithTs = Filters.and(
-            Filters.in(SingleTypeInfo._API_COLLECTION_ID, nonHostApiCollectionIds),
-            Filters.nin(SingleTypeInfo._API_COLLECTION_ID, deactivatedCollections),
-            Filters.gte(SingleTypeInfo._TIMESTAMP, startTimestamp),
-            Filters.lte(SingleTypeInfo._TIMESTAMP, endTimestamp)
+                Filters.in(SingleTypeInfo._API_COLLECTION_ID, nonHostApiCollectionIds),
+                Filters.nin(SingleTypeInfo._API_COLLECTION_ID, deactivatedCollections),
+                Filters.gte(SingleTypeInfo._TIMESTAMP, startTimestamp),
+                Filters.lte(SingleTypeInfo._TIMESTAMP, endTimestamp)
         );
         List<Bson> pipeline = new ArrayList<>();
 
-        BasicDBObject _id = 
+        BasicDBObject _id =
                 new BasicDBObject(SingleTypeInfo._API_COLLECTION_ID, "$" + SingleTypeInfo._API_COLLECTION_ID)
-                .append(SingleTypeInfo._URL, "$" + SingleTypeInfo._URL)
-                .append(SingleTypeInfo._METHOD, "$" +  SingleTypeInfo._METHOD);
+                        .append(SingleTypeInfo._URL, "$" + SingleTypeInfo._URL)
+                        .append(SingleTypeInfo._METHOD, "$" +  SingleTypeInfo._METHOD);
 
         pipeline.add(Aggregates.sort(Sorts.descending(SingleTypeInfo._TIMESTAMP)));
         pipeline.add(Aggregates.match(nonHostFilterWithTs));
@@ -645,7 +659,7 @@ public class InventoryAction extends UserAction {
     private Map<String, List> filters;
     private Map<String, String> filterOperators;
     private boolean sensitive;
-    private boolean request;
+    private List<String> request;
 
     private Bson prepareFilters(String collection) {
         ArrayList<Bson> filterList = new ArrayList<>();
@@ -656,26 +670,30 @@ public class InventoryAction extends UserAction {
             filterList.add(Filters.gt(ApiInfo.DISCOVERED_TIMESTAMP, startTimestamp));
             filterList.add(Filters.lt(ApiInfo.DISCOVERED_TIMESTAMP, endTimestamp));
         }
-        
-        if (sensitive) {
-            Bson sensitveSubTypeFilter;
-            if (request) {
-                List<String> sensitiveInRequest = SingleTypeInfoDao.instance.sensitiveSubTypeInRequestNames();
-                sensitiveInRequest.addAll(SingleTypeInfoDao.instance.sensitiveSubTypeNames());
-                sensitveSubTypeFilter = Filters.and(
-                        Filters.in("subType",sensitiveInRequest),
-                        Filters.eq("responseCode", -1)
-                );
-            } else {
-                List<String> sensitiveInResponse = SingleTypeInfoDao.instance.sensitiveSubTypeInResponseNames();
-                sensitiveInResponse.addAll(SingleTypeInfoDao.instance.sensitiveSubTypeNames());
-                sensitveSubTypeFilter = Filters.and(
-                    Filters.in("subType",sensitiveInResponse),
-                    Filters.gt("responseCode", -1)
-                );
-            }
 
-            filterList.add(sensitveSubTypeFilter);
+        if (sensitive) {
+            List<Bson> sensitiveFilters = new ArrayList<>();
+            for (String val: request) {
+                if (val.equalsIgnoreCase("request")) {
+                    List<String> sensitiveInRequest = SingleTypeInfoDao.instance.sensitiveSubTypeInRequestNames();
+                    sensitiveInRequest.addAll(SingleTypeInfoDao.instance.sensitiveSubTypeNames());
+                    sensitiveFilters.add(Filters.and(
+                            Filters.in("subType",sensitiveInRequest),
+                            Filters.eq("responseCode", -1)
+                    ));
+                } else if (val.equalsIgnoreCase("response")) {
+                    List<String> sensitiveInResponse = SingleTypeInfoDao.instance.sensitiveSubTypeInResponseNames();
+                    sensitiveInResponse.addAll(SingleTypeInfoDao.instance.sensitiveSubTypeNames());
+                    sensitiveFilters.add(Filters.and(
+                            Filters.in("subType",sensitiveInResponse),
+                            Filters.gt("responseCode", -1)
+                    ));
+                }
+            }
+            // If any filters were added, combine them with OR
+            if (!sensitiveFilters.isEmpty()) {
+                filterList.add(Filters.or(sensitiveFilters));
+            }
         }
 
         for(Map.Entry<String, List> entry: filters.entrySet()) {
@@ -700,7 +718,7 @@ public class InventoryAction extends UserAction {
                     }
 
                     break;
-                case "timestamp": 
+                case "timestamp":
                     List<Long> ll = value;
                     filterList.add(Filters.lte(key, (long) (Context.now()) - ll.get(0) * 86400L));
                     filterList.add(Filters.gte(key, (long) (Context.now()) - ll.get(1) * 86400L));
@@ -709,6 +727,7 @@ public class InventoryAction extends UserAction {
                     boolean isHeader = value.contains("header");
                     boolean isUrlParam = value.contains("urlParam");
                     boolean isPayload = value.contains("payload");
+                    boolean isQueryParam = value.contains("queryParam");
                     ArrayList<Bson> locationFilters = new ArrayList<>();
                     if (isHeader) {
                         locationFilters.add(Filters.eq(SingleTypeInfo._IS_HEADER, true));
@@ -722,6 +741,9 @@ public class InventoryAction extends UserAction {
                                 Filters.or(
                                         Filters.exists(SingleTypeInfo._IS_URL_PARAM, false),
                                         Filters.eq(SingleTypeInfo._IS_URL_PARAM, false))));
+                    }
+                    if (isQueryParam) {
+                        locationFilters.add(Filters.eq("isQueryParam", true));
                     }
                     filterList.add(Filters.or(locationFilters));
                     break;
@@ -750,23 +772,23 @@ public class InventoryAction extends UserAction {
                     }
 
                     Document query = new Document(ApiInfo.RESPONSE_CODES,
-                                new Document("$elemMatch",
+                            new Document("$elemMatch",
                                     new Document("$gte", startVal)
-                                        .append("$lte", endVal + 99)
-                                )
-                            );
-                    
+                                            .append("$lte", endVal + 99)
+                            )
+                    );
+
                     filterList.add(query);
                     break;
                 case "accessType":
                     Document typeQ = new Document(ApiInfo.API_ACCESS_TYPES,
                             new Document("$elemMatch",
-                                new Document("$in", value)
+                                    new Document("$in", value)
                             )
-                        );
+                    );
                     filterList.add(typeQ);
                     break;
-                default: 
+                default:
                     switch (operator) {
                         case "OR":
                         case "AND":
@@ -777,7 +799,7 @@ public class InventoryAction extends UserAction {
                             filterList.add(Filters.nin(key, value));
                             break;
                     }
-                    
+
             }
         }
         if(collection.equalsIgnoreCase("STI")){
@@ -785,8 +807,16 @@ public class InventoryAction extends UserAction {
         }else{
             filterList.add(Filters.nin(ApiInfo.ID_API_COLLECTION_ID, deactivatedCollections));
         }
-        
-        loggerMaker.infoAndAddToDb(filterList.toString(), LogDb.DASHBOARD);
+
+        try {
+            List<Integer> collectionIds = UsersCollectionsList.getCollectionsIdForUser(Context.userId.get(), Context.accountId.get());
+            if (collectionIds != null) {
+                filterList.add(Filters.in(SingleTypeInfo._COLLECTION_IDS, collectionIds));
+            }
+        } catch (Exception e) {
+        }
+
+        loggerMaker.debugAndAddToDb(filterList.toString(), LogDb.DASHBOARD);
         return Filters.and(filterList);
 
     }
@@ -796,18 +826,18 @@ public class InventoryAction extends UserAction {
     public String method;
     public String loadParamsOfEndpoint() {
         Bson filters = Filters.and(
-            Filters.in(SingleTypeInfo._COLLECTION_IDS, apiCollectionId),
-            Filters.eq("url", url),  
-            Filters.eq("method", method)
+                Filters.in(SingleTypeInfo._COLLECTION_IDS, apiCollectionId),
+                Filters.eq("url", url),
+                Filters.eq("method", method)
         );
 
         List<SingleTypeInfo> list = SingleTypeInfoDao.instance.findAll(filters);
 
 
         Bson filtersForCodeAnalysisSTIs = Filters.and(
-            Filters.eq(SingleTypeInfo._API_COLLECTION_ID, apiCollectionId),
-            Filters.eq(SingleTypeInfo._URL, url),  
-            Filters.eq(SingleTypeInfo._METHOD, method)
+                Filters.eq(SingleTypeInfo._API_COLLECTION_ID, apiCollectionId),
+                Filters.eq(SingleTypeInfo._URL, url),
+                Filters.eq(SingleTypeInfo._METHOD, method)
         );
         List<SingleTypeInfo> codeAnalysisSTIs = CodeAnalysisSingleTypeInfoDao.instance.findAll(filtersForCodeAnalysisSTIs);
         if (!codeAnalysisSTIs.isEmpty()) {
@@ -828,24 +858,24 @@ public class InventoryAction extends UserAction {
         return regexPattern;
     }
 
-    private Bson getSearchFilters(){
+    private Bson getSearchFilters(String searchKey){
         String regexPattern = getRegexPattern();
-        if(regexPattern.isEmpty() || regexPattern.length() == 0){
+        if(regexPattern == null || regexPattern.isEmpty()){
             return Filters.empty();
         }
-        Bson filter = Filters.regex(SingleTypeInfo._PARAM, regexPattern, "i");
+        Bson filter = Filters.regex(searchKey, regexPattern, "i");
         return filter;
     }
 
     private String searchString;
-    private List<SingleTypeInfo> getMongoResults() {
+    private List<SingleTypeInfo> getMongoResults(String searchKey) {
 
         List<String> sortFields = new ArrayList<>();
         sortFields.add(sortKey);
 
         Bson sort = sortOrder == 1 ? Sorts.ascending(sortFields) : Sorts.descending(sortFields);
 
-        loggerMaker.infoAndAddToDb(String.format("skip: %s, limit: %s, sort: %s", skip, limit, sort), LogDb.DASHBOARD);
+        loggerMaker.debugAndAddToDb(String.format("skip: %s, limit: %s, sort: %s", skip, limit, sort), LogDb.DASHBOARD);
         if(skip < 0){
             skip *= -1;
         }
@@ -856,22 +886,22 @@ public class InventoryAction extends UserAction {
 
         int pageLimit = Math.min(limit == 0 ? 50 : limit, 200);
 
-        List<SingleTypeInfo> list = SingleTypeInfoDao.instance.findAll(Filters.and(prepareFilters("STI"), getSearchFilters()), skip,pageLimit, sort);
-        return list;        
+        List<SingleTypeInfo> list = SingleTypeInfoDao.instance.findAll(Filters.and(prepareFilters("STI"), getSearchFilters(searchKey)), skip,pageLimit, sort);
+        return list;
     }
 
-    private long getTotalParams() {
-        return SingleTypeInfoDao.instance.getMCollection().countDocuments(Filters.and(prepareFilters("STI"), getSearchFilters()));
+    private long getTotalParams(String searchKey) {
+        return SingleTypeInfoDao.instance.getMCollection().countDocuments(Filters.and(prepareFilters("STI"), getSearchFilters(searchKey)));
     }
 
     public String fetchChanges() {
         response = new BasicDBObject();
 
-        long totalParams = getTotalParams();
-        loggerMaker.infoAndAddToDb("Total params: " + totalParams, LogDb.DASHBOARD);
+        long totalParams = getTotalParams(SingleTypeInfo._URL);
+        loggerMaker.debugAndAddToDb("Total params: " + totalParams, LogDb.DASHBOARD);
 
-        List<SingleTypeInfo> singleTypeInfos = getMongoResults();
-        loggerMaker.infoAndAddToDb("STI count: " + singleTypeInfos.size(), LogDb.DASHBOARD);
+        List<SingleTypeInfo> singleTypeInfos = getMongoResults(SingleTypeInfo._URL);
+        loggerMaker.debugAndAddToDb("STI count: " + singleTypeInfos.size(), LogDb.DASHBOARD);
 
         response.put("data", new BasicDBObject("endpoints", singleTypeInfos ).append("total", totalParams));
 
@@ -884,7 +914,7 @@ public class InventoryAction extends UserAction {
 
         long totalCount = ApiInfoDao.instance.estimatedDocumentCount();
         long countApiInfosInvalid = ApiInfoDao.instance.count(apiInfoFilter);
-        
+
         Bson useFilter = totalCount >= (2 * countApiInfosInvalid) ? apiInfoFilter : Filters.lt(ApiInfo.DISCOVERED_TIMESTAMP, this.startTimestamp - (Utils.DELTA_PERIOD_VALUE/4));
         List<ApiInfo> apiInfos = ApiInfoDao.instance.findAll(useFilter, 0, 2000, Sorts.descending(ApiInfo.DISCOVERED_TIMESTAMP), Projections.include(Constants.ID));
         Set<Integer> uniqueApiCollections = new HashSet<>();
@@ -899,12 +929,12 @@ public class InventoryAction extends UserAction {
         List<Bson> pipeline = new ArrayList<>();
         pipeline.add(Aggregates.sort(Sorts.descending(SingleTypeInfo._TIMESTAMP)));
         pipeline.add(Aggregates.match(
-            Filters.and(
-                Filters.in(SingleTypeInfo._API_COLLECTION_ID, uniqueApiCollections),
-                Filters.nin(SingleTypeInfo._API_COLLECTION_ID, deactivatedCollections),
-                Filters.gte(SingleTypeInfo._TIMESTAMP, this.startTimestamp),
-                Filters.lte(SingleTypeInfo._TIMESTAMP, this.endTimestamp)
-            )
+                Filters.and(
+                        Filters.in(SingleTypeInfo._API_COLLECTION_ID, uniqueApiCollections),
+                        Filters.nin(SingleTypeInfo._API_COLLECTION_ID, deactivatedCollections),
+                        Filters.gte(SingleTypeInfo._TIMESTAMP, this.startTimestamp),
+                        Filters.lte(SingleTypeInfo._TIMESTAMP, this.endTimestamp)
+                )
         ));
 
         try {
@@ -975,7 +1005,7 @@ public class InventoryAction extends UserAction {
         Map<String, Map<String, Integer>> resultMap = new HashMap<>();
         resultMap.put("REQUEST", requestResult);
         resultMap.put("RESPONSE", responseResult);
-        
+
         return resultMap;
     }
 
@@ -1020,7 +1050,7 @@ public class InventoryAction extends UserAction {
 
         SampleData sampleData = SampleDataDao.instance.fetchSampleDataForApi(apiCollectionId, url, urlMethod);
         List<String> samples = sampleData.getSamples();
-        loggerMaker.infoAndAddToDb("Found " + samples.size() + " samples for API: " + apiCollectionId + " " + url + method, LogDb.DASHBOARD);
+        loggerMaker.debugAndAddToDb("Found " + samples.size() + " samples for API: " + apiCollectionId + " " + url + method, LogDb.DASHBOARD);
 
         Bson stiFilter = SingleTypeInfoDao.filterForSTIUsingURL(apiCollectionId, url, urlMethod);
         SingleTypeInfoDao.instance.deleteAll(stiFilter);
@@ -1031,7 +1061,7 @@ public class InventoryAction extends UserAction {
         SensitiveSampleDataDao.instance.deleteAll(sampleDataFilter);
         TrafficInfoDao.instance.deleteAll(sampleDataFilter);
 
-        loggerMaker.infoAndAddToDb("Cleanup done", LogDb.DASHBOARD);
+        loggerMaker.debugAndAddToDb("Cleanup done", LogDb.DASHBOARD);
 
         List<HttpResponseParams> responses = new ArrayList<>();
         for (String sample : samples) {
@@ -1040,7 +1070,7 @@ public class InventoryAction extends UserAction {
                 httpResponseParams.requestParams.setApiCollectionId(apiCollectionId);
                 responses.add(httpResponseParams);
             } catch (Exception e) {
-                loggerMaker.infoAndAddToDb("Error while processing sample message while de-merging : " + e.getMessage(), LogDb.DASHBOARD);
+                loggerMaker.debugAndAddToDb("Error while processing sample message while de-merging : " + e.getMessage(), LogDb.DASHBOARD);
             }
         }
 
@@ -1067,25 +1097,215 @@ public class InventoryAction extends UserAction {
             URLTemplate urlTemplate = APICatalogSync.createUrlTemplate(url, URLMethods.Method.GET);
             if (info.getHttpCallParser().apiCatalogSync.getDbState(apiCollectionId) != null) {
                 RequestTemplate requestTemplate = info.getHttpCallParser().apiCatalogSync.getDbState(apiCollectionId).getTemplateURLToMethods().get(urlTemplate);
-                loggerMaker.infoAndAddToDb("Request template exists for url " + urlTemplate.getTemplateString() + " : " + ( requestTemplate != null), LogDb.DASHBOARD);
+                loggerMaker.debugAndAddToDb("Request template exists for url " + urlTemplate.getTemplateString() + " : " + ( requestTemplate != null), LogDb.DASHBOARD);
             } else {
-                loggerMaker.infoAndAddToDb("Clean dbState for apiCollectionId: " + apiCollectionId,LogDb.DASHBOARD);
+                loggerMaker.debugAndAddToDb("Clean dbState for apiCollectionId: " + apiCollectionId,LogDb.DASHBOARD);
             }
         } catch (Exception e) {
             e.printStackTrace();
             loggerMaker.errorAndAddToDb("Error while checking requestTemplate: " + e.getMessage(), LogDb.DASHBOARD);
         }
 
-        loggerMaker.infoAndAddToDb("Processing " + responses.size() + " httpResponseParams for API: " + apiCollectionId + " " + url + method, LogDb.DASHBOARD);
+        loggerMaker.debugAndAddToDb("Processing " + responses.size() + " httpResponseParams for API: " + apiCollectionId + " " + url + method, LogDb.DASHBOARD);
 
         responses = com.akto.runtime.Main.filterBasedOnHeaders(responses, AccountSettingsDao.instance.findOne(AccountSettingsDao.generateFilter()));
-        loggerMaker.infoAndAddToDb("After filter: Processing " + responses.size() + " httpResponseParams for API: " + apiCollectionId + " " + url + method, LogDb.DASHBOARD);
+        loggerMaker.debugAndAddToDb("After filter: Processing " + responses.size() + " httpResponseParams for API: " + apiCollectionId + " " + url + method, LogDb.DASHBOARD);
         try {
             info.getHttpCallParser().syncFunction(responses, true, false, accountSettings);
         } catch (Exception e) {
             addActionError("Error in httpCallParser : " + e.getMessage());
             return ERROR.toUpperCase();
         }
+
+        return SUCCESS.toUpperCase();
+    }
+
+    Map<ApiInfoKey, Map<String, Integer>> severityMapForCollection;
+
+    public String getSeveritiesCountPerCollection(){
+        if(apiCollectionId == -1){
+            return ERROR.toUpperCase();
+        }
+
+        if(deactivatedCollections.contains(apiCollectionId)){
+            return SUCCESS.toUpperCase();
+        }
+
+        Bson filter = Filters.in(SingleTypeInfo._COLLECTION_IDS, apiCollectionId);
+        this.severityMapForCollection = TestingRunIssuesDao.instance.getSeveritiesMapForApiInfoKeys(filter, false);
+        return SUCCESS.toUpperCase();
+    }
+
+    private String description;
+    public String saveEndpointDescription() {
+        if(description == null) {
+            addActionError("No description provided");
+            return Action.ERROR.toUpperCase();
+        }
+
+        ApiInfoDao.instance.updateOneNoUpsert(Filters.and(
+                Filters.eq(ApiInfo.ID_API_COLLECTION_ID, apiCollectionId),
+                Filters.eq(ApiInfo.ID_METHOD, method),
+                Filters.eq(ApiInfo.ID_URL, url)
+        ), Updates.set(ApiInfo.DESCRIPTION, description));
+
+        return SUCCESS.toUpperCase();
+    }
+
+    private Set<MergedUrls> mergedUrls;
+    public String getDeMergedApis() {
+        mergedUrls = MergedUrlsDao.instance.getMergedUrls();
+        return SUCCESS.toUpperCase();
+    }
+
+    public String undoDemergedApis() {
+        for(MergedUrls mergedUrl : mergedUrls) {
+            Bson filters = Filters.and(
+                    Filters.eq(MergedUrls.API_COLLECTION_ID, mergedUrl.getApiCollectionId()),
+                    Filters.eq(MergedUrls.URL, mergedUrl.getUrl()),
+                    Filters.eq(MergedUrls.METHOD, mergedUrl.getMethod())
+            );
+            MergedUrlsDao.instance.getMCollection().deleteOne(filters);
+        }
+        return SUCCESS.toUpperCase();
+    }
+
+    private List<ApiInfo.ApiInfoKey> apiInfoKeyList;
+
+    public String bulkDeMergeApis() {
+        if (apiInfoKeyList == null || apiInfoKeyList.isEmpty()) {
+            addActionError("API list cannot be null or empty");
+            return ERROR.toUpperCase();
+        }
+
+        int successCount = 0;
+        int failureCount = 0;
+        List<String> errors = new ArrayList<>();
+
+        for (ApiInfo.ApiInfoKey apiInfoKey : apiInfoKeyList) {
+            try {
+                String apiUrl = apiInfoKey.getUrl();
+                String apiMethod = apiInfoKey.getMethod().name();
+                int collectionId = apiInfoKey.getApiCollectionId();
+
+                // Validate that this is a merged URL
+                if (!APICatalog.isTemplateUrl(apiUrl)) {
+                    errors.add("URL " + apiUrl + " is not a merged URL");
+                    failureCount++;
+                    continue;
+                }
+
+                // Set temporary values for single API de-merge
+                this.url = apiUrl;
+                this.method = apiMethod;
+                this.apiCollectionId = collectionId;
+
+                // Call the existing deMergeApi logic
+                String result = deMergeApi();
+
+                if (SUCCESS.toUpperCase().equals(result)) {
+                    successCount++;
+                } else {
+                    errors.add("Failed to de-merge: " + apiMethod + " " + apiUrl);
+                    failureCount++;
+                }
+            } catch (Exception e) {
+                loggerMaker.errorAndAddToDb("Error de-merging API: " + e.getMessage(), LogDb.DASHBOARD);
+                errors.add("Error de-merging API: " + e.getMessage());
+                failureCount++;
+            }
+        }
+
+        loggerMaker.infoAndAddToDb("Bulk de-merge completed. Success: " + successCount + ", Failed: " + failureCount, LogDb.DASHBOARD);
+
+        if (failureCount > 0) {
+            addActionError("Some APIs failed to de-merge. Success: " + successCount + ", Failed: " + failureCount);
+        }
+
+        return SUCCESS.toUpperCase();
+    }
+
+    public void setApiInfoKeyList(List<ApiInfo.ApiInfoKey> apiInfoKeyList) {
+        this.apiInfoKeyList = apiInfoKeyList;
+    }
+
+    public List<ApiInfo.ApiInfoKey> getApiInfoKeyList() {
+        return apiInfoKeyList;
+    }
+
+    public String fetchNotTestedAPICount() {
+        Bson filterQ = UsageMetricCalculator.excludeDemosAndDeactivated(ApiInfo.ID_API_COLLECTION_ID);
+
+        Bson filter = Filters.and(
+                filterQ,
+                Filters.exists(ApiInfo.LAST_TESTED, false)
+        );
+
+        if (this.showApiInfo) {
+            this.notTestedEndpointsApiInfo = ApiInfoDao.instance.findAll(filter);
+            this.notTestedEndpointsCount = this.notTestedEndpointsApiInfo.size();
+        } else {
+            this.notTestedEndpointsCount = (int) ApiInfoDao.instance.count(filter);
+        }
+
+        return Action.SUCCESS.toUpperCase();
+    }
+
+
+    public String fetchOnlyOnceTestedAPICount() {
+
+        Bson filterQ = UsageMetricCalculator.excludeDemosAndDeactivated(ApiInfo.ID_API_COLLECTION_ID);
+
+        Bson filter = Filters.and(
+                filterQ,
+                Filters.exists(ApiInfo.LAST_TESTED, true),
+                Filters.eq(ApiInfo.TOTAL_TESTED_COUNT, 1)
+        );
+
+        if (this.showApiInfo) {
+            this.onlyOnceTestedEndpointsApiInfo = ApiInfoDao.instance.findAll(filter);
+            this.onlyOnceTestedEndpointsCount = this.onlyOnceTestedEndpointsApiInfo.size();
+        } else {
+            this.onlyOnceTestedEndpointsCount = (int) ApiInfoDao.instance.count(filter);
+        }
+
+        return Action.SUCCESS.toUpperCase();
+    }
+
+    public String fetchTestedApisRanges(){
+        response = new BasicDBObject();
+         try {
+            List<Bson> pipeLine = new ArrayList<>();
+            pipeLine.add(Aggregates.sort(
+                Sorts.descending(ApiInfo.LAST_TESTED)
+            ));
+            pipeLine.add(
+                Aggregates.match(Filters.gt(ApiInfo.LAST_TESTED, 0))
+            );
+
+            try {
+                List<Integer> collectionIds = UsersCollectionsList.getCollectionsIdForUser(Context.userId.get(), Context.accountId.get());
+                if(collectionIds != null) {
+                    pipeLine.add(Aggregates.match(Filters.in(SingleTypeInfo._COLLECTION_IDS, collectionIds)));
+                }
+            } catch(Exception e){
+            }
+
+            GroupByTimeRange.groupByWeek(pipeLine, ApiInfo.LAST_TESTED, "totalApisTested", new BasicDBObject());
+            MongoCursor<BasicDBObject> cursor = ApiInfoDao.instance.getMCollection().aggregate(pipeLine, BasicDBObject.class).cursor();
+            while (cursor.hasNext()) {
+                BasicDBObject document = cursor.next();
+                if(document.isEmpty()) continue;
+                BasicDBObject id = (BasicDBObject) document.get("_id");
+                String key = id.getInt("year") + "_" + id.getInt("weekOfYear");
+                response.put(key, document.getInt("totalApisTested"));
+            }
+            cursor.close();
+        } catch (Exception e) {
+            // TODO: handle exception
+            e.printStackTrace();
+        }
+
 
         return SUCCESS.toUpperCase();
     }
@@ -1208,16 +1428,37 @@ public class InventoryAction extends UserAction {
         this.sensitive = sensitive;
     }
 
-    public void setRequest(boolean request) {
+    public void setRequest(List<String> request) {
         this.request = request;
     }
 
-    
+
     public void setSubType(String subType) {
         this.subType = subType;
     }
 
     public void setSearchString(String searchString) {
         this.searchString = searchString;
+    }
+
+    public Map<ApiInfoKey, Map<String, Integer>> getSeverityMapForCollection() {
+        return severityMapForCollection;
+    }
+
+    public String getDescription() {
+        return description;
+    }
+
+    public void setDescription(String description) {
+        this.description = description;
+    }
+
+
+    public Set<MergedUrls> getMergedUrls() {
+        return mergedUrls;
+    }
+
+    public void setMergedUrls(Set<MergedUrls> mergedUrls) {
+        this.mergedUrls = mergedUrls;
     }
 }

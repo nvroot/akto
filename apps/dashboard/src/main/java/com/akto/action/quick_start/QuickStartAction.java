@@ -4,33 +4,37 @@ import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.util.*;
-import java.util.concurrent.*;
-
-import com.akto.dao.*;
-import com.akto.dto.*;
-import com.akto.util.Constants;
-import com.akto.util.DashboardMode;
-import com.akto.utils.platform.DashboardStackDetails;
-import com.akto.utils.platform.MirroringStackDetails;
-import com.akto.utils.cloud.stack.dto.StackState;
-import com.amazonaws.services.cloudformation.AmazonCloudFormation;
-import com.amazonaws.services.cloudformation.AmazonCloudFormationClientBuilder;
-import com.amazonaws.services.cloudformation.model.*;
-import org.apache.commons.lang3.StringUtils;
-import org.bson.conversions.Bson;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import com.akto.action.UserAction;
+import com.akto.dao.*;
 import com.akto.dao.context.Context;
 import com.akto.database_abstractor_authenticator.JwtAuthenticator;
+import com.akto.dto.*;
+import com.akto.dto.Config.DataDogConfig;
+import com.akto.dto.jobs.DatadogTrafficCollectorJobParams;
+import com.akto.dto.jobs.JobExecutorType;
 import com.akto.dto.third_party_access.PostmanCredential;
+import com.akto.jobs.JobScheduler;
 import com.akto.log.LoggerMaker;
 import com.akto.log.LoggerMaker.LogDb;
+import com.akto.util.Constants;
+import com.akto.util.DashboardMode;
 import com.akto.utils.cloud.CloudType;
 import com.akto.utils.cloud.Utils;
 import com.akto.utils.cloud.serverless.UpdateFunctionRequest;
 import com.akto.utils.cloud.serverless.aws.Lambda;
 import com.akto.utils.cloud.stack.Stack;
 import com.akto.utils.cloud.stack.aws.AwsStack;
+import com.akto.utils.cloud.stack.dto.StackState;
+import com.akto.utils.platform.DashboardStackDetails;
+import com.akto.utils.platform.MirroringStackDetails;
+import com.amazonaws.services.cloudformation.AmazonCloudFormation;
+import com.amazonaws.services.cloudformation.AmazonCloudFormationClientBuilder;
+import com.amazonaws.services.cloudformation.model.DescribeStackResourcesRequest;
+import com.amazonaws.services.cloudformation.model.Tag;
 import com.amazonaws.services.elasticloadbalancingv2.AmazonElasticLoadBalancing;
 import com.amazonaws.services.elasticloadbalancingv2.AmazonElasticLoadBalancingClientBuilder;
 import com.amazonaws.services.elasticloadbalancingv2.model.DescribeLoadBalancersRequest;
@@ -40,12 +44,15 @@ import com.mongodb.BasicDBObject;
 import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.Updates;
 import com.opensymphony.xwork2.Action;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+
+import org.apache.commons.lang3.StringUtils;
+import org.bson.conversions.Bson;
+
+import lombok.Setter;
 
 public class QuickStartAction extends UserAction {
 
-    private Logger logger = LoggerFactory.getLogger(QuickStartAction.class);
+    private LoggerMaker logger = new LoggerMaker(QuickStartAction.class, LogDb.DASHBOARD);;
 
     private boolean dashboardHasNecessaryRole;
     private List<AwsResource> availableLBs;
@@ -83,9 +90,6 @@ public class QuickStartAction extends UserAction {
             return null;
         }
     }
-
-
-    private static final LoggerMaker loggerMaker = new LoggerMaker(QuickStartAction.class);
 
     public String fetchQuickStartPageState() {
 
@@ -151,7 +155,7 @@ public class QuickStartAction extends UserAction {
                 }
             }
         } catch (Exception e) {
-            loggerMaker.errorAndAddToDb(e, String.format("Error occurred while fetching LBs %s", e), LogDb.DASHBOARD);
+            logger.errorAndAddToDb(e, String.format("Error occurred while fetching LBs %s", e), LogDb.DASHBOARD);
             this.dashboardHasNecessaryRole = false;
         }
         this.awsRegion = System.getenv(Constants.AWS_REGION);
@@ -202,7 +206,7 @@ public class QuickStartAction extends UserAction {
                 List<Tag> tags = Utils.fetchTags(DashboardStackDetails.getStackName());
                 String stackId = AwsStack.getInstance().createStack(MirroringStackDetails.getStackName(), parameters, template, tags);
                 AccountSettingsDao.instance.updateInitStackType(this.deploymentMethod.name());
-                loggerMaker.infoAndAddToDb(String.format("Stack %s creation started successfully", stackId), LogDb.DASHBOARD);
+                logger.debugAndAddToDb(String.format("Stack %s creation started successfully", stackId), LogDb.DASHBOARD);
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -243,7 +247,7 @@ public class QuickStartAction extends UserAction {
                 List<Tag> tags = Utils.fetchTags(DashboardStackDetails.getStackName());
                 String stackId = AwsStack.getInstance().createStack(MirroringStackDetails.getStackName(), parameters, template, tags);
                 AccountSettingsDao.instance.updateInitStackType(DeploymentMethod.AWS_TRAFFIC_MIRRORING.name());
-                logger.info("Started creation of stack with id: " + stackId);
+                logger.debug("Started creation of stack with id: " + stackId);
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -256,7 +260,7 @@ public class QuickStartAction extends UserAction {
                 String functionName = AwsStack.getInstance().fetchResourcePhysicalIdByLogicalId(MirroringStackDetails.getStackName(), MirroringStackDetails.CREATE_MIRROR_SESSION_LAMBDA);
                 UpdateFunctionRequest ufr = new UpdateFunctionRequest(updatedEnvVars);
                 Lambda.getInstance().updateFunctionConfiguration(functionName, ufr);
-                logger.info("Successfully updated env var for lambda");
+                logger.debug("Successfully updated env var for lambda");
                 // invoke lambda
             } catch (Exception e) {
                 e.printStackTrace();
@@ -267,7 +271,14 @@ public class QuickStartAction extends UserAction {
         return Action.SUCCESS.toUpperCase();
     }
 
+    @Setter
+    private int expiryTimeInMonth;
+
     public String fetchRuntimeHelmCommand() {
+        if(this.expiryTimeInMonth == 0 || this.expiryTimeInMonth > 24 || this.expiryTimeInMonth < -1) {
+            addActionError("Expiry time must be between 1 and 24 months");
+            return Action.ERROR.toUpperCase();
+        }
         try {
             Map<String,Object> claims = new HashMap<>();
             claims.put("accountId", Context.accountId.get());
@@ -276,7 +287,7 @@ public class QuickStartAction extends UserAction {
                 "Akto",
                 "invite_user",
                 Calendar.MONTH,
-                6
+                this.expiryTimeInMonth
             );
         } catch (Exception e) {
             e.printStackTrace();
@@ -310,20 +321,20 @@ public class QuickStartAction extends UserAction {
         invokeLambdaIfNecessary(stackState);
         if(Stack.StackStatus.CREATION_FAILED.toString().equalsIgnoreCase(this.stackState.getStatus())){
             AwsResourcesDao.instance.getMCollection().deleteOne(Filters.eq("_id", Context.accountId.get()));
-            loggerMaker.infoAndAddToDb("Current stack status is failed, so we are removing entry from db", LogDb.DASHBOARD);
+            logger.debugAndAddToDb("Current stack status is failed, so we are removing entry from db", LogDb.DASHBOARD);
         }
         if(Stack.StackStatus.DOES_NOT_EXISTS.toString().equalsIgnoreCase(this.stackState.getStatus())){
             AwsResources resources = AwsResourcesDao.instance.findOne(AwsResourcesDao.generateFilter());
             if(resources != null && resources.getLoadBalancers().size() > 0){
                 AwsResourcesDao.instance.getMCollection().deleteOne(AwsResourcesDao.generateFilter());
-                loggerMaker.infoAndAddToDb("Stack does not exists but entry present in DB, removing it", LogDb.DASHBOARD);
+                logger.debugAndAddToDb("Stack does not exists but entry present in DB, removing it", LogDb.DASHBOARD);
                 fetchLoadBalancers();
             } else {
-                loggerMaker.infoAndAddToDb("Nothing set in DB, moving on", LogDb.DASHBOARD);
+                logger.debugAndAddToDb("Nothing set in DB, moving on", LogDb.DASHBOARD);
             }
         }
         if(!DeploymentMethod.AWS_TRAFFIC_MIRRORING.equals(this.deploymentMethod) && Stack.StackStatus.CREATE_COMPLETE.toString().equals(this.stackState.getStatus())){
-            loggerMaker.infoAndAddToDb("Stack creation complete, fetching outputs", LogDb.DASHBOARD);
+            logger.debugAndAddToDb("Stack creation complete, fetching outputs", LogDb.DASHBOARD);
             Map<String, String> outputsMap = Utils.fetchOutputs(MirroringStackDetails.getStackName());
             this.aktoNLBIp = outputsMap.get("AktoNLB");
             this.aktoMongoConn = System.getenv("AKTO_MONGO_CONN");
@@ -345,12 +356,12 @@ public class QuickStartAction extends UserAction {
                                 Filters.eq("_id", backwardCompatibility.getId()),
                                 Updates.set(BackwardCompatibility.MIRRORING_LAMBDA_TRIGGERED, true)
                         );
-                        loggerMaker.infoAndAddToDb("Successfully triggered CreateMirrorSession", LogDb.DASHBOARD);
+                        logger.debugAndAddToDb("Successfully triggered CreateMirrorSession", LogDb.DASHBOARD);
                     } catch(Exception e){
-                        loggerMaker.errorAndAddToDb(e, String.format("Failed to invoke lambda for the first time : %s", e), LogDb.DASHBOARD);
+                        logger.errorAndAddToDb(e, String.format("Failed to invoke lambda for the first time : %s", e), LogDb.DASHBOARD);
                     }
                 } else {
-                    loggerMaker.infoAndAddToDb("Already invoked", LogDb.DASHBOARD);
+                    logger.debugAndAddToDb("Already invoked", LogDb.DASHBOARD);
                 }
             }
         };
@@ -485,4 +496,57 @@ public class QuickStartAction extends UserAction {
         return apiToken;
     }
 
+    @Setter
+    private String datadogApiKey;
+    @Setter
+    private String datadogAppKey;
+    @Setter
+    private String datadogSite;
+    @Setter
+    private List<String> serviceNames;
+
+    public String saveDataDogConfigs() {
+        try {
+            if(StringUtils.isEmpty(datadogApiKey) || StringUtils.isEmpty(datadogAppKey) || StringUtils.isEmpty(datadogSite)) {
+                addActionError("Datadog API key, App key and Site are required");
+                return Action.ERROR.toUpperCase();
+            }
+            DataDogConfig dataDogConfig = new DataDogConfig(Context.accountId.get());
+            dataDogConfig.setApiKey(datadogApiKey);
+            dataDogConfig.setAppKey(datadogAppKey);
+            dataDogConfig.setSite(datadogSite);
+            dataDogConfig.setAccountId(Context.accountId.get());
+            ConfigsDao.instance.insertOne(dataDogConfig);
+
+            // Create a recurring job to collect traffic from Datadog every 1 hour
+            createDatadogTrafficCollectorJob(this.datadogApiKey, this.datadogAppKey, this.datadogSite, this.serviceNames);
+
+            logger.infoAndAddToDb("DataDog configs saved and traffic collector job created successfully");
+        } catch (Exception e) {
+            logger.errorAndAddToDb(e, "Failed to save DataDog configs: " + e.getMessage());
+            addActionError("Failed to save DataDog configs: " + e.getMessage());
+            return Action.ERROR.toUpperCase();
+        }
+        return Action.SUCCESS.toUpperCase();
+    }
+    private void createDatadogTrafficCollectorJob(String datadogApiKey, String datadogAppKey, String datadogSite, List<String> serviceNames) {
+
+        DatadogTrafficCollectorJobParams jobParams = new DatadogTrafficCollectorJobParams(
+                0,
+                datadogApiKey,
+                datadogAppKey,
+                datadogSite,
+                serviceNames,
+                1000
+            );
+        JobScheduler.scheduleRecurringJob(
+            Context.accountId.get(),
+            jobParams,
+            JobExecutorType.DASHBOARD,
+            60*60,
+            Context.now()
+        );
+
+        logger.infoAndAddToDb("Datadog traffic collector job scheduled to run every hour");
+    }
 }

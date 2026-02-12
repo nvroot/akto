@@ -4,7 +4,9 @@ public class LoginFlowEnums {
 
     public enum AuthMechanismTypes {
         HARDCODED,
-        LOGIN_REQUEST
+        LOGIN_REQUEST,
+        TLS_AUTH,
+        SAMPLE_DATA
     }
 
     public enum LoginStepTypesEnums {

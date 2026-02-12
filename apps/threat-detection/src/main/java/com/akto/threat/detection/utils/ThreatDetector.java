@@ -1,0 +1,703 @@
+package com.akto.threat.detection.utils;
+
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import org.ahocorasick.trie.Trie;
+import org.json.JSONObject;
+
+import com.akto.data_actor.DataActor;
+import com.akto.data_actor.DataActorFactory;
+import com.akto.dto.HttpResponseParams;
+import com.akto.dto.RawApi;
+import com.akto.dto.ApiInfo;
+import com.akto.dto.ApiInfo.ApiInfoKey;
+import com.akto.dto.monitoring.FilterConfig;
+import com.akto.dto.type.KeyTypes;
+import com.akto.dto.type.URLTemplate;
+import com.akto.threat.detection.cache.AccountConfig;
+import com.akto.threat.detection.cache.AccountConfigurationCache;
+import com.akto.threat.detection.ip_api_counter.ParamEnumerationDetector;
+import com.akto.log.LoggerMaker;
+import com.akto.log.LoggerMaker.LogDb;
+import com.akto.rules.TestPlugin;
+import com.akto.test_editor.Utils;
+import com.akto.test_editor.filter.data_operands_impl.ValidationResult;
+import com.akto.util.Constants;
+import com.akto.util.modifier.JwtModifier;
+import com.akto.utils.AuthPolicy;
+import com.client9.libinjection.SQLParse;
+import com.akto.util.Pair;
+
+import static com.akto.threat_utils.Utils.cleanThreatUrl;
+import static com.akto.threat_utils.Utils.generateTrie;
+import static com.akto.threat_utils.Utils.isMatchingUrl;
+
+public class ThreatDetector {
+
+    public static final String LFI_FILTER_ID = "LocalFileInclusionLFIRFI";
+    public static final String USER_AUTH_MISMATCH_FILTER_ID = "UserAuthMismatch";
+    public static final String WEAK_AUTHENTICATION_FILTER_ID = "WeakAuthentication";
+    public static final String SQL_INJECTION_FILTER_ID = "SQLInjection";
+    public static final String OS_COMMAND_INJECTION_FILTER_ID = "OSCommandInjection";
+    public static final String SSRF_FILTER_ID = "SSRF";
+    public static final String PARAM_ENUMERATION_FILTER_ID = "ParamEnumeration";
+    private static Map<String, Object> varMap = new HashMap<>();
+    private Trie lfiTrie;
+    private Trie osCommandInjectionTrie;
+    private Trie ssrfTrie;
+    private static final LoggerMaker logger = new LoggerMaker(ThreatDetector.class, LogDb.THREAT_DETECTION);
+    private static final DataActor dataActor = DataActorFactory.fetchInstance();
+
+    public ThreatDetector() throws Exception {
+        lfiTrie = generateTrie(Constants.LFI_OS_FILES_DATA);
+        osCommandInjectionTrie = generateTrie(Constants.OS_COMMAND_INJECTION_DATA);
+        ssrfTrie = generateTrie(Constants.SSRF_DATA);
+    }
+
+    public boolean applyFilter(FilterConfig threatFilter, HttpResponseParams httpResponseParams, RawApi rawApi,
+            ApiInfoKey apiInfoKey, URLTemplate matchedTemplate) {
+        try {
+            if(threatFilter.getId().equals(USER_AUTH_MISMATCH_FILTER_ID)){
+                return isUserAuthMismatchThreat(httpResponseParams, rawApi);
+            }
+            if (threatFilter.getId().equals(LFI_FILTER_ID)) {
+                return isLFiThreat(httpResponseParams);
+            }
+            // if (threatFilter.getId().equals(SQL_INJECTION_FILTER_ID)) {
+            //     return isSqliThreat(httpResponseParams);
+            // }
+            if (threatFilter.getId().equals(OS_COMMAND_INJECTION_FILTER_ID)) {
+                return isOsCommandInjectionThreat(httpResponseParams);
+            }
+            if (threatFilter.getId().equals(SSRF_FILTER_ID)) {
+                return isSSRFThreat(httpResponseParams);
+            }
+            if (threatFilter.getId().equals(PARAM_ENUMERATION_FILTER_ID)) {
+                return isParamEnumerationThreat(httpResponseParams, matchedTemplate);
+            }
+            if (threatFilter.getId().equals(WEAK_AUTHENTICATION_FILTER_ID)) {
+                return isWeakAuthenticationThreat(httpResponseParams);
+            }
+            return validateFilterForRequest(threatFilter, rawApi, apiInfoKey);
+        } catch (Exception e) {
+            logger.errorAndAddToDb(e, "Error in applyFilter " + e.getMessage());
+            return false;
+        }
+
+    }
+
+
+    public List<Pair<String, String>> getUrlParamNamesAndValues(String url, URLTemplate urlTemplate) {
+        url = cleanThreatUrl(url, lfiTrie, osCommandInjectionTrie, ssrfTrie);
+        url = ApiInfo.getForwardNormalizedUrl(url);
+        List<Pair<String, String>> paramNameAndValue = new ArrayList<>();
+        String[] urlTokens = url.split("/");
+
+        String[] templateTokens = urlTemplate.getTokens();
+
+        // Extract params where template token is null (parameterized position)
+        for (int i = 0; i < templateTokens.length && i < urlTokens.length; i++) {
+            if (templateTokens[i] == null) {
+                // Param name is the previous static segment, or fallback to type name
+                String paramName;
+                if (i > 0 && templateTokens[i - 1] != null) {
+                    paramName = templateTokens[i - 1];
+                } else {
+                    // Fallback: use the type name if available
+                    paramName = urlTemplate.getTypes()[i] != null
+                            ? urlTemplate.getTypes()[i].name()
+                            : "param" + i;
+                }
+                String paramValue = urlTokens[i];
+                paramNameAndValue.add(new Pair<>(paramName, paramValue));
+            }
+        }
+        return paramNameAndValue;
+    }
+
+    public URLTemplate findMatchingUrlTemplate(HttpResponseParams httpResponseParams){
+        AccountConfig config = AccountConfigurationCache.getInstance().getConfig(dataActor);
+        Map<Integer, List<URLTemplate>> apiCollectionUrlTemplates = config.getApiCollectionUrlTemplates();
+
+        int apiCollectionId = httpResponseParams.requestParams.getApiCollectionId();
+        String url = httpResponseParams.getRequestParams().getURL();
+        String method = httpResponseParams.getRequestParams().getMethod();
+
+        // Get matching api template for this static url.
+        // Example:
+        // threat traffic url: /v1/users/123/?/etc/passwd -> clean this url ->
+        // /v1/users/123
+        // api info templates: /v1/users/INTEGER -> match with cleaned url
+        // TODO: Cache already matched templates
+        URLTemplate urlTemplate = isMatchingUrl(apiCollectionId, url, method, apiCollectionUrlTemplates, lfiTrie,
+                osCommandInjectionTrie, ssrfTrie);
+        return urlTemplate;
+
+    }
+
+    public boolean isWeakAuthenticationThreat(HttpResponseParams httpResponseParams) {
+        if (httpResponseParams == null || httpResponseParams.getRequestParams() == null) {
+            return false;
+        }
+
+        Map<String, List<String>> headers = httpResponseParams.getRequestParams().getHeaders();
+        if (headers == null || headers.isEmpty()) {
+            return false;
+        }
+
+        // Step 1: Check structural issues in Authorization header
+        if (hasDuplicateAuthHeaders(headers)) {
+            logger.debug("Weak authentication: Multiple Authorization headers detected");
+            return true;
+        }
+
+        if (hasHeaderInjection(headers)) {
+            logger.debug("Weak authentication: Header injection detected");
+            return true;
+        }
+
+        if (hasOversizedToken(headers)) {
+            logger.debug("Weak authentication: Oversized token detected");
+            return true;
+        }
+
+        // Step 1.5: Check for Bearer with empty/malformed token directly
+        // This catches cases that AuthPolicy might not classify as BEARER type
+        if (hasEmptyOrMalformedBearer(headers)) {
+            logger.debug("Weak authentication: Empty or malformed Bearer token detected");
+            return true;
+        }
+
+        // Step 2: Use AuthPolicy to find auth types
+        Set<ApiInfo.AuthType> authTypes = AuthPolicy.findAuthTypes(headers);
+
+        // Step 3: Basic auth is always weak
+        if (authTypes.contains(ApiInfo.AuthType.BASIC)) {
+            logger.debug("Weak authentication: Basic Auth detected");
+            return true;
+        }
+
+        // Step 4: For Bearer auth, apply extra validations
+        if (authTypes.contains(ApiInfo.AuthType.BEARER)) {
+            String token = AuthPolicy.extractBearerToken(headers);
+
+            // Check for empty bearer token
+            if (token == null || token.trim().isEmpty()) {
+                logger.debug("Weak authentication: Empty bearer token detected");
+                return true;
+            }
+
+            // Check if it's a valid JWT
+            if (KeyTypes.isJWT(token)) {
+                if (isWeakJwtAlgorithm(token)) {
+                    logger.debug("Weak authentication: Weak JWT algorithm detected");
+                    return true;
+                }
+                if (isJwtExpired(token)) {
+                    logger.debug("Weak authentication: Expired JWT detected");
+                    return true;
+                }
+            } else {
+                // Not a valid JWT - check if it's a fake/suspicious token
+                if (token.length() < 10) {
+                    logger.debug("Weak authentication: Fake/invalid bearer token detected");
+                    return true;
+                }
+            }
+        }
+
+        // Step 5: Check JWT tokens in cookies and other headers
+        if (authTypes.contains(ApiInfo.AuthType.JWT)) {
+            List<String> jwtTokens = AuthPolicy.extractAllJwtTokens(headers);
+            for (String jwt : jwtTokens) {
+                if (isWeakJwtAlgorithm(jwt)) {
+                    logger.debug("Weak authentication: Weak JWT algorithm detected in cookie/header");
+                    return true;
+                }
+                if (isJwtExpired(jwt)) {
+                    logger.debug("Weak authentication: Expired JWT detected in cookie/header");
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private boolean hasDuplicateAuthHeaders(Map<String, List<String>> headers) {
+        for (Map.Entry<String, List<String>> entry : headers.entrySet()) {
+            if (entry.getKey() != null && entry.getKey().equalsIgnoreCase(AuthPolicy.AUTHORIZATION_HEADER_NAME)) {
+                List<String> values = entry.getValue();
+                return values != null && values.size() > 1;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasHeaderInjection(Map<String, List<String>> headers) {
+        for (Map.Entry<String, List<String>> entry : headers.entrySet()) {
+            if (entry.getKey() != null && entry.getKey().equalsIgnoreCase(AuthPolicy.AUTHORIZATION_HEADER_NAME)) {
+                List<String> values = entry.getValue();
+                if (values != null) {
+                    for (String value : values) {
+                        if (value != null && (value.contains("\n") || value.contains("\r"))) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean hasOversizedToken(Map<String, List<String>> headers) {
+        for (Map.Entry<String, List<String>> entry : headers.entrySet()) {
+            if (entry.getKey() != null && entry.getKey().equalsIgnoreCase(AuthPolicy.AUTHORIZATION_HEADER_NAME)) {
+                List<String> values = entry.getValue();
+                if (values != null) {
+                    for (String value : values) {
+                        if (value != null && value.length() > 2048) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean hasEmptyOrMalformedBearer(Map<String, List<String>> headers) {
+        for (Map.Entry<String, List<String>> entry : headers.entrySet()) {
+            String headerName = entry.getKey();
+            if (headerName == null || !headerName.equalsIgnoreCase(AuthPolicy.AUTHORIZATION_HEADER_NAME)) {
+                continue;
+            }
+
+            List<String> values = entry.getValue();
+            if (values == null) {
+                continue;
+            }
+
+            for (String value : values) {
+                if (value == null) {
+                    continue;
+                }
+
+                String trimmed = value.trim();
+                if (trimmed.length() < 6 || !trimmed.substring(0, 6).equalsIgnoreCase("bearer")) {
+                    continue;
+                }
+
+                // Extract token part after "Bearer"
+                String tokenPart = trimmed.length() > 6 ? trimmed.substring(6).trim() : "";
+
+                // Empty bearer token (e.g., "Bearer" or "Bearer ")
+                if (tokenPart.isEmpty()) {
+                    return true;
+                }
+
+                // Check if token looks like JWT but is malformed
+                if (!tokenPart.contains(".")) {
+                    continue;
+                }
+
+                String[] parts = tokenPart.split("\\.");
+                // Valid JWT has exactly 3 parts
+                if (parts.length != 3) {
+                    return true;
+                }
+
+                // Check if any part is empty
+                for (String part : parts) {
+                    if (part.isEmpty()) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean isWeakJwtAlgorithm(String jwt) {
+        try {
+            String alg = extractAlgFromJwt(jwt);
+            if (alg == null) {
+                return false;
+            }
+
+            // Check for HS256 (weak symmetric algorithm)
+            if (alg.equalsIgnoreCase("HS256")) {
+                return true;
+            }
+
+            // Check for alg=none (algorithm confusion attack)
+            if (alg.equalsIgnoreCase("none")) {
+                return true;
+            }
+
+            return false;
+        } catch (Exception e) {
+            logger.debug("Error checking JWT algorithm: " + e.getMessage());
+            return false;
+        }
+    }
+
+    private String extractAlgFromJwt(String jwt) {
+        try {
+            Map<String, String> headerMap = new HashMap<>();
+            Map<String, Object> result = JwtModifier.manipulateJWTHeaderToMap(jwt, headerMap);
+
+            if (result != null && result.containsKey("alg")) {
+                Object alg = result.get("alg");
+                return alg != null ? alg.toString() : null;
+            }
+
+            return null;
+        } catch (Exception e) {
+            logger.debug("Error extracting alg from JWT: " + e.getMessage());
+            return null;
+        }
+    }
+
+    private boolean isJwtExpired(String jwt) {
+        try {
+            Long exp = extractExpFromJwt(jwt);
+            if (exp == null) {
+                return false;
+            }
+
+            // Get current time in seconds (JWT exp is in seconds since epoch)
+            long currentTime = System.currentTimeMillis() / 1000;
+
+            // Token is expired if exp is less than current time
+            return exp < currentTime;
+        } catch (Exception e) {
+            logger.debug("Error checking JWT expiration: " + e.getMessage());
+            return false;
+        }
+    }
+
+    private Long extractExpFromJwt(String jwt) {
+        try {
+            Map<String, Object> payloadMap = JwtModifier.extractBodyFromJWT(jwt);
+
+            if (payloadMap != null && payloadMap.containsKey("exp")) {
+                Object exp = payloadMap.get("exp");
+                if (exp instanceof Number) {
+                    return ((Number) exp).longValue();
+                } else if (exp instanceof String) {
+                    return Long.parseLong((String) exp);
+                }
+            }
+
+            return null;
+        } catch (Exception e) {
+            logger.debug("Error extracting exp from JWT: " + e.getMessage());
+            return null;
+        }
+    }
+    
+    public boolean isParamEnumerationThreat(HttpResponseParams httpResponseParams, URLTemplate matchedTemplate) {
+
+        URLTemplate urlTemplate = matchedTemplate;
+        if(urlTemplate == null){
+            return false;
+        }
+
+        String url = httpResponseParams.getRequestParams().getURL();
+
+        List<Pair<String, String>> paramNamesAndValues = getUrlParamNamesAndValues(url, urlTemplate);
+
+
+        for(Pair<String, String> paramNameAndValue : paramNamesAndValues){
+            String paramName = paramNameAndValue.getFirst();
+            String paramValue = paramNameAndValue.getSecond();
+            boolean isUserEnumAttack = ParamEnumerationDetector.getInstance().recordAndCheck(
+                httpResponseParams.getSourceIP(),
+                httpResponseParams.requestParams.getApiCollectionId(),
+                httpResponseParams.getRequestParams().getMethod(),
+                urlTemplate.getTemplateString(),
+                paramName,
+                paramValue
+            );
+
+            if(isUserEnumAttack){
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public boolean isSuccessfulExploit(List<FilterConfig> successfulExploitFilters,
+            RawApi rawApi, ApiInfoKey apiInfoKey) {
+        for (FilterConfig filter : successfulExploitFilters) {
+            if (validateFilterForRequest(filter, rawApi, apiInfoKey)) {
+                logger.debug("Exploit successful for ApiInfo {}, filterId {}", apiInfoKey.toString(), filter.getId());
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public boolean isIgnoredEvent(List<FilterConfig> ignoredEventFilters,
+            RawApi rawApi, ApiInfoKey apiInfoKey) {
+        for (FilterConfig filter : ignoredEventFilters) {
+            if (validateFilterForRequest(filter, rawApi, apiInfoKey)) {
+                logger.debug("Event should be ignored for ApiInfo {}, filterId {}", apiInfoKey.toString(), filter.getId());
+                return true;
+            }
+        }
+        return false;
+    }
+
+
+    public boolean shouldIgnoreApi(FilterConfig apiFilter, RawApi rawApi, ApiInfoKey apiInfoKey) {
+        if (apiFilter.getIgnore() == null) {
+            return false; // No ignore section, don't ignore
+        }
+        
+        try {
+            // Create a temporary FilterConfig with just the ignore condition as the filter
+            FilterConfig tempFilter = new FilterConfig();
+            tempFilter.setId(apiFilter.getId() + "_ignore");
+            tempFilter.setFilter(apiFilter.getIgnore());
+            tempFilter.setWordLists(apiFilter.getWordLists());
+            
+            // If the ignore condition matches, we should ignore this API
+            boolean matchesIgnore = validateFilterForRequest(tempFilter, rawApi, apiInfoKey);
+            if (matchesIgnore) {
+                logger.debug("API matches ignore condition for filterId {}, apiInfoKey {}", 
+                    apiFilter.getId(), apiInfoKey.toString());
+            }
+            return matchesIgnore;
+        } catch (Exception e) {
+            logger.errorAndAddToDb(e, "Error checking ignore condition for filterId " + apiFilter.getId());
+            return false; // On error, don't ignore
+        }
+    }
+
+    
+
+    private boolean validateFilterForRequest(
+            FilterConfig apiFilter, RawApi rawApi, ApiInfo.ApiInfoKey apiInfoKey) {
+        try {
+            varMap.clear();
+            String filterExecutionLogId = "";
+            ValidationResult res = TestPlugin.validateFilter(
+                    apiFilter.getFilter().getNode(), rawApi, apiInfoKey, varMap, filterExecutionLogId);
+
+            return res.getIsValid();
+        } catch (Exception e) {
+            logger.errorAndAddToDb("Error in validateFilterForRequest " + e.getMessage());
+            e.printStackTrace();
+        }
+
+        return false;
+    }
+
+    public boolean isSqliThreat(HttpResponseParams httpResponseParams) {
+
+        if (SQLParse.isSQLi(httpResponseParams.getRequestParams().getURL())) {
+            return true;
+        }
+
+        if (SQLParse.isSQLi(httpResponseParams.getRequestParams().getHeaders().toString())) {
+            return true;
+        }
+
+        return SQLParse.isSQLi(httpResponseParams.getRequestParams().getPayload());
+    }
+
+    public boolean isLFiThreat(HttpResponseParams httpResponseParams) {
+        if (lfiTrie.containsMatch(httpResponseParams.getRequestParams().getURL())) {
+            return true;
+        }
+
+        if (lfiTrie.containsMatch(httpResponseParams.getRequestParams().getHeaders().toString())) {
+            return true;
+        }
+
+        return lfiTrie.containsMatch(httpResponseParams.getRequestParams().getPayload());
+    }
+
+    public boolean isOsCommandInjectionThreat(HttpResponseParams httpResponseParams) {
+        if (osCommandInjectionTrie.containsMatch(httpResponseParams.getRequestParams().getURL())) {
+            return true;
+        }
+
+        if (osCommandInjectionTrie.containsMatch(httpResponseParams.getRequestParams().getHeaders().toString())) {
+            return true;
+        }
+
+        return osCommandInjectionTrie.containsMatch(httpResponseParams.getRequestParams().getPayload());
+    }
+
+    public boolean isSSRFThreat(HttpResponseParams httpResponseParams) {
+        if (ssrfTrie.containsMatch(httpResponseParams.getRequestParams().getURL())) {
+            return true;
+        }
+
+        if (ssrfTrie.containsMatch(httpResponseParams.getRequestParams().getHeaders().toString())) {
+            return true;
+        }
+
+        return ssrfTrie.containsMatch(httpResponseParams.getRequestParams().getPayload());
+    }
+
+    private static final String USER_ID_URL_REGEX = "/users/([^/]+)";
+
+    public boolean isUserAuthMismatchThreat(HttpResponseParams httpResponseParams, RawApi rawApi) {
+        // Early return if not target account or not successful response
+        if (httpResponseParams.getStatusCode() != 200) {
+            return false;
+        }
+
+        if(!Utils.extractHostHeader(httpResponseParams).equalsIgnoreCase("api.stage.store.ignite.harman.com")){
+            return false;
+        }
+
+        // Extract userId from URL
+        String url = httpResponseParams.getRequestParams().getURL();
+        List<String> matches = Utils.extractRegex(url, USER_ID_URL_REGEX);
+        if (matches.isEmpty()) {
+            return false;
+        }
+        String userId = matches.get(0);
+
+        // Find JWT from request headers
+        String jwt = findJwtFromHeaders(httpResponseParams.getRequestParams().getHeaders());
+        if (jwt == null) {
+            return false;
+        }
+
+        // Extract sub claim from JWT
+        String sub = extractSubFromJwt(jwt);
+        if (sub == null) {
+            return false;
+        }
+
+        // Threat detected if sub doesn't match userId
+        return !sub.contains(userId);
+    }
+
+    private String findJwtFromHeaders(Map<String, List<String>> headers) {
+        if (headers == null) {
+            return null;
+        }
+        for (List<String> values : headers.values()) {
+            for (String value : values) {
+                String token = stripBearerPrefix(value);
+                if (KeyTypes.isJWT(token)) {
+                    return token;
+                }
+            }
+        }
+        return null;
+    }
+
+    private String stripBearerPrefix(String value) {
+        if (value != null && value.toLowerCase().startsWith("bearer ")) {
+            return value.substring(7).trim();
+        }
+        return value;
+    }
+
+    private String extractSubFromJwt(String jwt) {
+        try {
+            String[] parts = jwt.split("\\.");
+            if (parts.length != 3) {
+                return null;
+            }
+            String payload = new String(Base64.getUrlDecoder().decode(parts[1]));
+            JSONObject jsonPayload = new JSONObject(payload);
+            if (!jsonPayload.has("sub")) {
+                return null;
+            }
+            return jsonPayload.getString("sub");
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Get exact character positions where threats were detected
+     * Returns a list of SchemaConformanceError with location, positions, and matched keyword
+     */
+    public List<com.akto.proto.generated.threat_detection.message.sample_request.v1.SchemaConformanceError> getThreatPositions(String filterId, HttpResponseParams httpResponseParams) {
+        List<com.akto.proto.generated.threat_detection.message.sample_request.v1.SchemaConformanceError> errors = new ArrayList<>();
+        
+        if (httpResponseParams == null || httpResponseParams.getRequestParams() == null) {
+            return errors;
+        }
+
+        Trie trieToUse = null;
+        if (LFI_FILTER_ID.equals(filterId)) {
+            trieToUse = lfiTrie;
+        } else if (OS_COMMAND_INJECTION_FILTER_ID.equals(filterId)) {
+            trieToUse = osCommandInjectionTrie;
+        } else if (SSRF_FILTER_ID.equals(filterId)) {
+            trieToUse = ssrfTrie;
+        }
+
+        if (trieToUse == null) {
+            return errors;
+        }
+
+        addThreatMatches(errors, trieToUse, httpResponseParams.getRequestParams().getURL(),
+                "url",
+                com.akto.proto.generated.threat_detection.message.sample_request.v1.SchemaConformanceError.Location.LOCATION_URL,
+                filterId);
+
+        addThreatMatches(errors, trieToUse, String.valueOf(httpResponseParams.getRequestParams().getHeaders()),
+                "headers",
+                com.akto.proto.generated.threat_detection.message.sample_request.v1.SchemaConformanceError.Location.LOCATION_HEADER,
+                filterId);
+
+        addThreatMatches(errors, trieToUse, httpResponseParams.getRequestParams().getPayload(),
+                "payload",
+                com.akto.proto.generated.threat_detection.message.sample_request.v1.SchemaConformanceError.Location.LOCATION_BODY,
+                filterId);
+
+        return errors;
+    }
+
+    private void addThreatMatches(List<com.akto.proto.generated.threat_detection.message.sample_request.v1.SchemaConformanceError> results,
+            Trie trie,
+            String text,
+            String instancePath,
+            com.akto.proto.generated.threat_detection.message.sample_request.v1.SchemaConformanceError.Location location,
+            String filterId) {
+        if (trie == null || text == null) {
+            return;
+        }
+
+        // Stop after first detection per location to avoid duplicate reports
+        for (org.ahocorasick.trie.Emit emit : trie.parseText(text)) {
+            if (emit == null || emit.getKeyword() == null) {
+                continue;
+            }
+
+            com.akto.proto.generated.threat_detection.message.sample_request.v1.SchemaConformanceError error =
+                com.akto.proto.generated.threat_detection.message.sample_request.v1.SchemaConformanceError.newBuilder()
+                    .setMessage(String.format("%s [chars %d-%d]", emit.getKeyword(), emit.getStart(), emit.getEnd() + 1))
+                    .setSchemaPath(filterId)
+                    .setInstancePath(instancePath)
+                    .setAttribute("threat_detected")
+                    .setLocation(location)
+                    .setStart(emit.getStart())
+                    .setEnd(emit.getEnd() + 1)
+                    .setPhrase(emit.getKeyword())
+                    .build();
+            results.add(error);
+            // Stop after first detection in this location
+            break;
+        }
+    }
+
+}

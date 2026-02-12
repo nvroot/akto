@@ -1,5 +1,7 @@
 package com.akto.action.threat_detection;
 
+import com.akto.ProtoMessageUtils;
+import com.akto.dao.context.Context;
 import com.akto.dao.monitoring.FilterYamlTemplateDao;
 import com.akto.dto.monitoring.FilterConfig;
 import com.akto.dto.test_editor.Category;
@@ -12,7 +14,7 @@ import com.akto.proto.generated.threat_detection.service.dashboard_service.v1.Th
 import com.akto.proto.generated.threat_detection.service.dashboard_service.v1.ThreatCategoryWiseCountResponse;
 import com.akto.proto.generated.threat_detection.service.dashboard_service.v1.ThreatSeverityWiseCountResponse;
 import com.akto.proto.generated.threat_detection.service.dashboard_service.v1.DailyActorsCountResponse.ActorsCount;
-import com.akto.proto.utils.ProtoMessageUtils;
+import com.akto.proto.generated.threat_detection.service.dashboard_service.v1.FetchTopNDataResponse;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.HashMap;
 import java.util.List;
@@ -27,6 +29,7 @@ import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.util.EntityUtils;
 import org.bson.Document;
+import lombok.Getter;
 
 public class ThreatApiAction extends AbstractThreatDetectionAction {
 
@@ -38,9 +41,21 @@ public class ThreatApiAction extends AbstractThreatDetectionAction {
   static final int LIMIT = 50;
   long total;
   Map<String, Integer> sort;
+  List<String> latestAttack;
   int startTs;
   int endTs;
 
+  @Getter int totalAnalysed;
+  @Getter int totalAttacks;
+  @Getter int totalCriticalActors;
+  @Getter int totalActiveStatus;
+  @Getter int totalIgnoredStatus;
+  @Getter int totalUnderReviewStatus;
+
+  @Getter List<TopApiData> topApis;
+  @Getter List<TopHostData> topHosts;
+
+  // TODO: remove this, use API Executor.
   private final CloseableHttpClient httpClient;
 
   private final ObjectMapper objectMapper = new ObjectMapper();
@@ -87,11 +102,13 @@ public class ThreatApiAction extends AbstractThreatDetectionAction {
         String.format("%s/api/dashboard/get_subcategory_wise_count", this.getBackendUrl()));
     post.addHeader("Authorization", "Bearer " + this.getApiToken());
     post.addHeader("Content-Type", "application/json");
+    post.addHeader("x-context-source", Context.contextSource.get() != null ? Context.contextSource.get().toString() : "");
 
     Map<String, Object> body = new HashMap<String, Object>() {
       {
         put("start_ts", startTs);
         put("end_ts", endTs);
+        put("latestAttack", latestAttack);
       }
     };
     String msg = objectMapper.valueToTree(body).toString();
@@ -130,11 +147,13 @@ public class ThreatApiAction extends AbstractThreatDetectionAction {
 
     post.addHeader("Authorization", "Bearer " + this.getApiToken());
     post.addHeader("Content-Type", "application/json");
+    post.addHeader("x-context-source", Context.contextSource.get() != null ? Context.contextSource.get().toString() : "");
 
     Map<String, Object> body = new HashMap<String, Object>() {
       {
         put("start_ts", startTs);
         put("end_ts", endTs);
+        put("latestAttack", latestAttack);
       }
     };
     String msg = objectMapper.valueToTree(body).toString();
@@ -167,11 +186,13 @@ public class ThreatApiAction extends AbstractThreatDetectionAction {
     HttpPost post = new HttpPost(String.format("%s/api/dashboard/get_daily_actor_count", this.getBackendUrl()));
     post.addHeader("Authorization", "Bearer " + this.getApiToken());
     post.addHeader("Content-Type", "application/json");
+    post.addHeader("x-context-source", Context.contextSource.get() != null ? Context.contextSource.get().toString() : "");
 
     Map<String, Object> body = new HashMap<String, Object>() {
       {
         put("start_ts", startTs);
         put("end_ts", endTs);
+        put("latestAttack", latestAttack);
       }
     };
     String msg = objectMapper.valueToTree(body).toString();
@@ -192,6 +213,14 @@ public class ThreatApiAction extends AbstractThreatDetectionAction {
                           return new DailyActorsCount(smr.getTs(), smr.getTotalActors(), smr.getCriticalActors());
                         })
                     .collect(Collectors.toList());
+                
+                // Set summary counts
+                this.totalAnalysed = m.getTotalAnalysed();
+                this.totalAttacks = m.getTotalAttacks();
+                this.totalCriticalActors = m.getCriticalActorsCount();
+                this.totalActiveStatus = m.getTotalActive();
+                this.totalIgnoredStatus = m.getTotalIgnored();
+                this.totalUnderReviewStatus = m.getTotalUnderReview();
               });
     } catch (Exception e) {
       e.printStackTrace();
@@ -205,11 +234,13 @@ public class ThreatApiAction extends AbstractThreatDetectionAction {
     HttpPost post = new HttpPost(String.format("%s/api/dashboard/get_threat_activity_timeline", this.getBackendUrl()));
     post.addHeader("Authorization", "Bearer " + this.getApiToken());
     post.addHeader("Content-Type", "application/json");
+    post.addHeader("x-context-source", Context.contextSource.get() != null ? Context.contextSource.get().toString() : "");
 
     Map<String, Object> body = new HashMap<String, Object>() {
       {
         put("start_ts", startTs);
         put("end_ts", endTs);
+        put("latestAttack", latestAttack);
       }
     };
     String msg = objectMapper.valueToTree(body).toString();
@@ -248,12 +279,20 @@ public class ThreatApiAction extends AbstractThreatDetectionAction {
     HttpPost post = new HttpPost(String.format("%s/api/dashboard/list_threat_apis", this.getBackendUrl()));
     post.addHeader("Authorization", "Bearer " + this.getApiToken());
     post.addHeader("Content-Type", "application/json");
+    post.addHeader("x-context-source", Context.contextSource.get() != null ? Context.contextSource.get().toString() : "");
+
+    Map<String, Object> filters = new HashMap<>();
+
+    filters.put("latestAttack", latestAttack);
 
     Map<String, Object> body = new HashMap<String, Object>() {
       {
         put("skip", skip);
         put("limit", LIMIT);
         put("sort", sort);
+        if(!filters.isEmpty()) {
+          put("filter", filters);
+        }
       }
     };
     String msg = objectMapper.valueToTree(body).toString();
@@ -275,7 +314,8 @@ public class ThreatApiAction extends AbstractThreatDetectionAction {
                             URLMethods.Method.fromString(smr.getMethod()),
                             smr.getActorsCount(),
                             smr.getRequestsCount(),
-                            smr.getDiscoveredAt()))
+                            smr.getDiscoveredAt(),
+                            smr.getHost()))
                     .collect(Collectors.toList());
 
                 this.total = m.getTotal();
@@ -288,34 +328,55 @@ public class ThreatApiAction extends AbstractThreatDetectionAction {
     return SUCCESS.toUpperCase();
   }
 
-  public int getSkip() {
-    return skip;
+  public String fetchThreatTopNData() {
+    HttpPost post = new HttpPost(String.format("%s/api/dashboard/get_top_n_data", this.getBackendUrl()));
+    post.addHeader("Authorization", "Bearer " + this.getApiToken());
+    post.addHeader("Content-Type", "application/json");
+    post.addHeader("x-context-source", Context.contextSource.get() != null ? Context.contextSource.get().toString() : "");
+
+    Map<String, Object> body = new HashMap<String, Object>() {
+      {
+        put("start_ts", startTs);
+        put("end_ts", endTs);
+        put("latestAttack", latestAttack);
+        put("limit", 5);
+      }
+    };
+    String msg = objectMapper.valueToTree(body).toString();
+
+    StringEntity requestEntity = new StringEntity(msg, ContentType.APPLICATION_JSON);
+    post.setEntity(requestEntity);
+
+    try (CloseableHttpResponse resp = this.httpClient.execute(post)) {
+      String responseBody = EntityUtils.toString(resp.getEntity());
+
+      ProtoMessageUtils.<FetchTopNDataResponse>toProtoMessage(
+        FetchTopNDataResponse.class, responseBody)
+          .ifPresent(
+              m -> {
+                this.topApis = m.getTopApisList().stream()
+                    .map(
+                        smr -> new TopApiData(
+                            smr.getEndpoint(),
+                            smr.getMethod(),
+                            smr.getAttacks(),
+                            smr.getSeverity()))
+                    .collect(Collectors.toList());
+                this.topHosts = m.getTopHostsList().stream()
+                    .map(smr -> new TopHostData(
+                        smr.getHost(),
+                        smr.getAttacks()
+                    )).collect(Collectors.toList());
+              });
+    } catch (Exception e) {
+      e.printStackTrace();
+      return ERROR.toUpperCase();
+    }
+
+    return SUCCESS.toUpperCase();
   }
 
-  public void setSkip(int skip) {
-    this.skip = skip;
-  }
-
-  public static int getLimit() {
-    return LIMIT;
-  }
-
-  public long getTotal() {
-    return total;
-  }
-
-  public void setTotal(long total) {
-    this.total = total;
-  }
-
-  public List<DashboardThreatApi> getApis() {
-    return apis;
-  }
-
-  public void setApis(List<DashboardThreatApi> apis) {
-    this.apis = apis;
-  }
-
+  // Explicit getters/setters required by JSON serialization and frontend usage
   public Map<String, Integer> getSort() {
     return sort;
   }
@@ -344,24 +405,45 @@ public class ThreatApiAction extends AbstractThreatDetectionAction {
     return startTs;
   }
 
-  public void setStartTs(int startTs) {
-    this.startTs = startTs;
+  public int getSkip() {
+    return skip;
   }
 
-  public int getEndTs() {
-    return endTs;
+  public void setSkip(int skip) {
+    this.skip = skip;
   }
 
-  public void setEndTs(int endTs) {
-    this.endTs = endTs;
+  public long getTotal() {
+    return total;
+  }
+
+  public void setTotal(long total) {
+    this.total = total;
+  }
+
+  public List<DashboardThreatApi> getApis() {
+    return apis;
+  }
+
+  public void setApis(List<DashboardThreatApi> apis) {
+    this.apis = apis;
   }
 
   public List<ThreatActivityTimeline> getThreatActivityTimelines() {
     return threatActivityTimelines;
   }
 
-  public void setThreatActivityTimelines(List<ThreatActivityTimeline> threatActivityTimelines) {
-    this.threatActivityTimelines = threatActivityTimelines;
+  public void setStartTs(int startTs) {
+    this.startTs = startTs;
   }
 
+  public void setEndTs(int endTs) {
+    this.endTs = endTs;
+  }
+
+  public void setLatestAttack(List<String> latestAttack) {
+    this.latestAttack = latestAttack;
+  }
+  
 }
+

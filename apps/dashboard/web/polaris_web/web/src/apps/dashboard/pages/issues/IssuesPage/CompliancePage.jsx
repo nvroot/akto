@@ -6,7 +6,8 @@ import Store from "../../../store";
 import func from "@/util/func";
 import { MarkFulfilledMinor, ReportMinor, ExternalMinor } from '@shopify/polaris-icons';
 import PersistStore from "../../../../main/PersistStore";
-import { Button, Popover, Box, Avatar, Text, HorizontalGrid, HorizontalStack, IndexFiltersMode, VerticalStack } from "@shopify/polaris";
+import { Button, Popover, Box, Avatar, Text, HorizontalGrid, HorizontalStack, IndexFiltersMode, VerticalStack, ActionList } from "@shopify/polaris";
+import CompulsoryDescriptionModal from "../components/CompulsoryDescriptionModal.jsx";
 import EmptyScreensLayout from "../../../components/banners/EmptyScreensLayout";
 import { ISSUES_PAGE_DOCS_URL } from "../../../../main/onboardingData";
 import {SelectCollectionComponent} from "../../testing/TestRunsPage/TestrunsBannerComponent"
@@ -20,15 +21,15 @@ import DateRangeFilter from "../../../components/layouts/DateRangeFilter.jsx";
 import { produce } from "immer";
 import "./style.css"
 import transform from "../transform.js";
-import SummaryInfo from "./SummaryInfo.jsx";
 import useTable from "../../../components/tables/TableContext.js";
 import values from "@/util/values";
 import SpinnerCentered from "../../../components/progress/SpinnerCentered.jsx";
 import TableStore from "../../../components/tables/TableStore.js";
 import CriticalFindingsGraph from "./CriticalFindingsGraph.jsx";
-import CriticalUnsecuredAPIsOverTimeGraph from "./CriticalUnsecuredAPIsOverTimeGraph.jsx";
 import settingFunctions from "../../settings/module.js";
 import JiraTicketCreationModal from "../../../components/shared/JiraTicketCreationModal.jsx";
+import issuesFunctions from '@/apps/dashboard/pages/issues/module';
+import { isMCPSecurityCategory, isGenAISecurityCategory, isAgenticSecurityCategory, mapLabel, getDashboardCategory  } from "../../../../main/labelHelper";
 import testingApi from "../../testing/api.js"
 
 const sortOptions = [
@@ -40,7 +41,22 @@ const sortOptions = [
     { label: 'Discovered time', value: 'creationTime desc', directionLabel: 'Oldest', sortKey: 'creationTime', columnIndex: 7 },
 ];
 
-const allCompliances = ["CIS Controls", "CMMC", "CSA CCM", "Cybersecurity Maturity Model Certification (CMMC)", "FISMA", "FedRAMP", "GDPR", "HIPAA", "ISO 27001", "NIST 800-171", "NIST 800-53", "PCI DSS", "SOC 2"];
+const getCompliances = () => {
+    const isDemoAccount = func.isDemoAccount();
+    const isMCP = isMCPSecurityCategory();
+    const isGenAiSecurity = isGenAISecurityCategory();
+    const isAgenticSecurity = isAgenticSecurityCategory();
+
+    if (isDemoAccount && (isMCP || isAgenticSecurity || isGenAiSecurity)) {
+        // Different compliances for demo account + MCP + Agentic Security
+        return ["OWASP Agentic", "OWASP LLM", "NIST AI Risk Management Framework","MITRE ATLAS","CIS Controls", "CMMC", "CSA CCM", "Cybersecurity Maturity Model Certification (CMMC)", "FISMA", "FedRAMP", "GDPR", "HIPAA", "ISO 27001", "NIST 800-171", "NIST 800-53", "PCI DSS", "SOC 2", "OWASP"];
+    }
+    
+    // Default compliances
+    return ["CIS Controls", "CMMC", "CSA CCM", "Cybersecurity Maturity Model Certification (CMMC)", "FISMA", "FedRAMP", "GDPR", "HIPAA", "ISO 27001", "NIST 800-171", "NIST 800-53", "PCI DSS", "SOC 2", "OWASP"];
+};
+
+const allCompliances = getCompliances();
 
 let filtersOptions = [
     {
@@ -68,8 +84,8 @@ let filtersOptions = [
     },    
     {
         key: 'collectionIds',
-        label: 'API groups',
-        title: 'API groups',
+        label: mapLabel('Api', getDashboardCategory()) + ' groups',
+        title: mapLabel('Api', getDashboardCategory()) + ' groups',
         choices: [],
     },
     {
@@ -170,6 +186,26 @@ function CompliancePage() {
     const [complianceView, setComplianceView] = useState('SOC 2');
     const [filteredTestIds, setFilteredTestIds] = useState([]);
 
+    const [boardsModalActive, setBoardsModalActive] = useState(false)
+    const [projectToWorkItemsMap, setProjectToWorkItemsMap] = useState({})
+    const [projectId, setProjectId] = useState('')
+    const [workItemType, setWorkItemType] = useState('')
+
+    const [serviceNowModalActive, setServiceNowModalActive] = useState(false)
+    const [serviceNowTables, setServiceNowTables] = useState([])
+    const [serviceNowTable, setServiceNowTable] = useState('')
+
+    // Compulsory description modal states
+    const [compulsoryDescriptionModal, setCompulsoryDescriptionModal] = useState(false)
+    const [pendingIgnoreAction, setPendingIgnoreAction] = useState(null)
+    const [mandatoryDescription, setMandatoryDescription] = useState("")
+    const [modalLoading, setModalLoading] = useState(false)
+    const [compulsorySettings, setCompulsorySettings] = useState({
+        falsePositive: false,
+        noTimeToFix: false,
+        acceptableFix: false
+    })
+
 
     const [currDateRange, dispatchCurrDateRange] = useReducer(produce((draft, action) => func.dateRangeReducer(draft, action)), values.ranges[5])
 
@@ -236,6 +272,65 @@ function CompliancePage() {
         setKey(!key)
     }, [startTimestamp, endTimestamp])
 
+    // Fetch compulsory description settings
+    useEffect(() => {
+        const fetchCompulsorySettings = async () => {
+            try {
+                const {resp} = await settingFunctions.fetchAdminInfo();
+                
+                if (resp?.compulsoryDescription) {
+                    setCompulsorySettings(resp.compulsoryDescription);
+                }
+            } catch (error) {
+            }
+        };
+        fetchCompulsorySettings();
+    }, []);
+
+    // Map ignore reason text to key
+    const getIgnoreReasonKey = (ignoreReason) => {
+        const reasonMap = {
+            "False positive": "falsePositive",
+            "Acceptable risk": "acceptableFix",
+            "No time to fix": "noTimeToFix"
+        };
+        return reasonMap[ignoreReason] || ignoreReason;
+    };
+
+    // Use keys directly for reasons and compulsorySettings
+    const requiresDescription = (reasonKey) => {
+        return compulsorySettings[reasonKey] || false;
+    };
+
+    const handleIgnoreWithDescription = () => {
+        if (pendingIgnoreAction && mandatoryDescription.trim()) {
+            // Update description first for all items
+            const updatePromises = pendingIgnoreAction.items.map(item => 
+                testingApi.updateIssueDescription(item, mandatoryDescription)
+            );
+            Promise.allSettled(updatePromises).then(() => {
+                performBulkIgnoreAction(pendingIgnoreAction.items, pendingIgnoreAction.reason, mandatoryDescription);
+                setCompulsoryDescriptionModal(false);
+                setPendingIgnoreAction(null);
+                setMandatoryDescription("");
+            });
+        }
+    };
+
+    useEffect(() => {
+        if (compulsoryDescriptionModal && pendingIgnoreAction && pendingIgnoreAction.items?.length > 0) {
+            setMandatoryDescription("");
+            setModalLoading(false);
+        }
+    }, [compulsoryDescriptionModal, pendingIgnoreAction]);
+
+    const performBulkIgnoreAction = (items, ignoreReason, description = "") => {
+        api.bulkUpdateIssueStatus(items, "IGNORED", ignoreReason, { description }).then((res) => {
+            setToast(true, false, `Issue${items.length==1 ? "" : "s"} ignored${description ? " with description" : ""}`)
+            resetResourcesSelected()
+        })
+    }
+
     const [searchParams, setSearchParams] = useSearchParams();
     const resultId = searchParams.get("result")
 
@@ -258,14 +353,72 @@ function CompliancePage() {
 
     filtersOptions = func.getCollectionFilters(filtersOptions)
 
-    const handleSaveJiraAction = () => {
+    const handleSaveJiraAction = (issueId, labels) => {
+        let jiraMetaData;
+        try {
+            jiraMetaData = issuesFunctions.prepareAdditionalIssueFieldsJiraMetaData(projId, issueType);
+            // Use labels parameter if provided
+            if (labels !== undefined && labels && labels.trim()) {
+                jiraMetaData.labels = labels.trim();
+            }
+        } catch (error) {
+            setToast(true, true, "Please fill all required fields before creating a Jira ticket.");
+            resetResourcesSelected()
+            return;
+        }
+
         setToast(true, false, "Please wait while we create your Jira ticket.")
         setJiraModalActive(false)
-        api.bulkCreateJiraTickets(selectedIssuesItems, window.location.origin, projId, issueType).then((res) => {
+        api.bulkCreateJiraTickets(selectedIssuesItems, window.location.origin, projId, issueType, jiraMetaData).then((res) => {
             if(res?.errorMessage) {
                 setToast(true, false, res?.errorMessage)
             } else {
                 setToast(true, false, `${selectedIssuesItems.length} jira ticket${selectedIssuesItems.length === 1 ? "" : "s"} created.`)
+            }
+            resetResourcesSelected()
+        })
+    }
+
+    const handleSaveBulkAzureWorkItemsAction = () => {
+            let customABWorkItemFieldsPayload = [];
+            try {
+                customABWorkItemFieldsPayload = issuesFunctions.prepareCustomABWorkItemFieldsPayload(projectId, workItemType);
+            } catch (error) {
+                setToast(true, true, "Please fill all required fields before creating a Azure boards work item.");
+                return;
+            }
+
+            setToast(true, false, "Please wait while we create your Azure Boards Work Item.")
+            setBoardsModalActive(false)
+            api.bulkCreateAzureWorkItems(selectedIssuesItems, projectId, workItemType, window.location.origin, customABWorkItemFieldsPayload).then((res) => {
+                if(res?.errorMessage) {
+                    setToast(true, false, res?.errorMessage)
+                } else {
+                    setToast(true, false, `${selectedIssuesItems.length} Azure Boards Work Item${selectedIssuesItems.length === 1 ? "" : "s"} created.`)
+                }
+                resetResourcesSelected()
+            })
+    }
+
+    const createServiceNowTicketBulk = (items) => {
+        setSelectedIssuesItems(items)
+        settingFunctions.fetchServiceNowIntegration().then((serviceNowIntegration) => {
+            if(serviceNowIntegration.tableNames && serviceNowIntegration.tableNames.length > 0){
+                setServiceNowTables(serviceNowIntegration.tableNames)
+                setServiceNowTable(serviceNowIntegration.tableNames[0])
+            }
+            setServiceNowModalActive(true)
+        })
+    }
+
+    const handleSaveBulkServiceNowTicketsAction = () => {
+        setToast(true, false, "Please wait while we create your ServiceNow tickets.")
+        setServiceNowModalActive(false)
+        api.bulkCreateServiceNowTickets(selectedIssuesItems, serviceNowTable).then((res) => {
+            if(res?.errorMessage) {
+                setToast(true, false, res?.errorMessage)
+            } else {
+                setToast(true, false, `${selectedIssuesItems.length} ServiceNow ticket${selectedIssuesItems.length === 1 ? "" : "s"} created.`)
             }
             resetResourcesSelected()
         })
@@ -281,10 +434,13 @@ function CompliancePage() {
         }
         
         function ignoreAction(ignoreReason){
-            api.bulkUpdateIssueStatus(items, "IGNORED", ignoreReason, {} ).then((res) => {
-                setToast(true, false, `Issue${items.length==1 ? "" : "s"} ignored`)
-                resetResourcesSelected()
-            })
+            const reasonKey = getIgnoreReasonKey(ignoreReason);
+            if (requiresDescription(reasonKey)) {
+                setPendingIgnoreAction({ items, reason: ignoreReason });
+                setCompulsoryDescriptionModal(true);
+                return;
+            }
+            performBulkIgnoreAction(items, ignoreReason);
         }
         
         function reopenAction(){
@@ -309,6 +465,23 @@ function CompliancePage() {
                 setJiraModalActive(true)
             })
         }
+
+        function createAzureBoardWorkItemBulk() {
+            setSelectedIssuesItems(items)
+            settingFunctions.fetchAzureBoardsIntegration().then((azureBoardsIntegration) => {
+                if(azureBoardsIntegration.projectToWorkItemsMap != null && Object.keys(azureBoardsIntegration.projectToWorkItemsMap).length > 0){
+                    setProjectToWorkItemsMap(azureBoardsIntegration.projectToWorkItemsMap)
+                    if(Object.keys(azureBoardsIntegration.projectToWorkItemsMap).length > 0){
+                        setProjectId(Object.keys(azureBoardsIntegration.projectToWorkItemsMap)[0])
+                        setWorkItemType(Object.values(azureBoardsIntegration.projectToWorkItemsMap)[0]?.[0])
+                    }
+                }else{
+                    setProjectId(azureBoardsIntegration?.projectId)
+                    setWorkItemType(azureBoardsIntegration?.workItemType)
+                }
+                setBoardsModalActive(true)
+            })
+        }
         
         let issues = [{
             content: 'False positive',
@@ -324,11 +497,25 @@ function CompliancePage() {
         },
         {
             content: 'Export selected Issues',
-            onAction: () => { openVulnerabilityReport(items) }
+            onAction: () => { openVulnerabilityReport(items, false) }
+        },
+        {
+            content: 'Export selected Issues summary',
+            onAction: () => { openVulnerabilityReport(items, true) }
         },
         {
             content: 'Create jira ticket',
             onAction: () => { createJiraTicketBulk() }
+        },
+        {
+            content: 'Create azure work item',
+            onAction: () => { createAzureBoardWorkItemBulk() },
+            disabled: (window.AZURE_BOARDS_INTEGRATED === 'false')
+        },
+        {
+            content: 'Create ServiceNow ticket',
+            onAction: () => { createServiceNowTicketBulk(items) },
+            disabled: (window.SERVICENOW_INTEGRATED === 'false')
         }]
         
         let reopen =  [{
@@ -390,10 +577,12 @@ function CompliancePage() {
           }          
     }
 
-    const openVulnerabilityReport = async(items = []) => {
+    const openVulnerabilityReport = async (items = [], summaryMode = false) => {
         await testingApi.generatePDFReport(issuesFilters, items).then((res) => {
-          const responseId = res.split("=")[1];
-          window.open('/dashboard/issues/summary/' + responseId.split("}")[0], '_blank');
+            const responseId = res.split("=")[1];
+            const summaryModeQueryParam = summaryMode === true ? 'summaryMode=true' : '';
+            const redirectUrl = `/dashboard/issues/summary/${responseId.split("}")[0]}?${summaryModeQueryParam}`;
+            window.open(redirectUrl, '_blank');
         })
 
         resetResourcesSelected();
@@ -423,6 +612,11 @@ function CompliancePage() {
         setLoading(false)
     }
   }, [subCategoryMap, apiCollectionMap])
+
+    useEffect(() => {
+        issuesFunctions.fetchIntegrationCustomFieldsMetadata();
+    }, [])
+  
 
     const onSelectCompliance = (compliance) => {
         setComplianceView(compliance)
@@ -480,8 +674,8 @@ function CompliancePage() {
                             method: item?.id?.apiInfoKey?.method,
                             url: item?.id?.apiInfoKey?.url,
                             id: JSON.stringify(item?.id),
+                            jiraIssueUrl: item?.jiraIssueUrl || "",
                         }],
-                        urlsKey: ['']
                     })
                 } else {
                     const existingIssue = uniqueIssuesMap.get(key)
@@ -552,6 +746,8 @@ function CompliancePage() {
             />
         </>
     )
+
+    const [popOverActive, setPopOverActive] = useState(false)
     
     return (
         <>
@@ -603,7 +799,7 @@ function CompliancePage() {
                     iconSrc={"/public/alert_hexagon.svg"}
                     headingText={"No issues yet!"}
                     description={"There are currently no issues with your APIs. Haven't run your tests yet? Start testing now to prevent any potential issues."}
-                    buttonText={"Run test"}
+                    buttonText={mapLabel("Run test", getDashboardCategory())}
                     infoItems={infoItems}
                     infoTitle={"Once you have issues:"}
                     learnText={"issues"}
@@ -614,10 +810,74 @@ function CompliancePage() {
             
             : components
             ]}
-            primaryAction={<Button primary onClick={() => openVulnerabilityReport()} disabled={showEmptyScreen}>Export {complianceView} report</Button>}
-            secondaryActions={<DateRangeFilter initialDispatch={currDateRange} dispatch={(dateObj) => dispatchCurrDateRange({ type: "update", period: dateObj.period, title: dateObj.title, alias: dateObj.alias })} />}
+            primaryAction={<Button primary onClick={() => openVulnerabilityReport([], false)} disabled={showEmptyScreen}>Export {complianceView} report</Button>}
+            secondaryActions={
+                <HorizontalStack gap={2}>
+                    <DateRangeFilter initialDispatch={currDateRange} dispatch={(dateObj) => dispatchCurrDateRange({ type: "update", period: dateObj.period, title: dateObj.title, alias: dateObj.alias })} />
+                    <Popover
+                        active={popOverActive}
+                        activator={<Button onClick={() => setPopOverActive((prev) => !prev)} disabled={showEmptyScreen} disclosure>More Actions</Button>}
+                        autofocusTarget="first-node"
+                        onClose={() => setPopOverActive(false)}
+                    >
+                        <ActionList
+                            actionRole="menuitem"
+                            items={[
+                                {
+                                    content: 'Export summary report',
+                                    onAction: () => openVulnerabilityReport([], true),
+                                },
+                            ]}
+                        />
+                    </Popover>
+                </HorizontalStack>
+            }
         />
             {(resultId !== null && resultId.length > 0) ? <TestRunResultPage /> : null}
+            <JiraTicketCreationModal
+                modalActive={jiraModalActive}
+                setModalActive={setJiraModalActive}
+                handleSaveAction={handleSaveJiraAction}
+                jiraProjectMaps={jiraProjectMaps}
+                setProjId={setProjId}
+                setIssueType={setIssueType}
+                projId={projId}
+                issueType={issueType}
+            />
+
+            <JiraTicketCreationModal
+                modalActive={boardsModalActive}
+                setModalActive={setBoardsModalActive}
+                handleSaveAction={handleSaveBulkAzureWorkItemsAction}
+                jiraProjectMaps={projectToWorkItemsMap}
+                setProjId={setProjectId}
+                setIssueType={setWorkItemType}
+                projId={projectId}
+                issueType={workItemType}
+                isAzureModal={true}
+            />
+
+            <JiraTicketCreationModal
+                modalActive={serviceNowModalActive}
+                setModalActive={setServiceNowModalActive}
+                handleSaveAction={handleSaveBulkServiceNowTicketsAction}
+                jiraProjectMaps={serviceNowTables}
+                setProjId={setServiceNowTable}
+                setIssueType={() => {}}
+                projId={serviceNowTable}
+                issueType=""
+                isServiceNowModal={true}
+            />
+
+            <CompulsoryDescriptionModal
+                open={compulsoryDescriptionModal}
+                onClose={() => setCompulsoryDescriptionModal(false)}
+                onConfirm={handleIgnoreWithDescription}
+                reasonLabel={pendingIgnoreAction?.reason}
+                description={mandatoryDescription}
+                onChangeDescription={setMandatoryDescription}
+                loading={modalLoading}
+            />
         </>
     )
 }

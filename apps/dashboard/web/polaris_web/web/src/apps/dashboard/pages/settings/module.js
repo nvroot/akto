@@ -232,12 +232,27 @@ const settingFunctions = {
       })
       return arr
     },
+    fetchAllMetricNamesAndDescription: async function(){
+      let arr = []
+      await settingRequests.fetchAllMetricsDesciptions().then((resp)=>{
+        arr = resp.names
+      })
+      return arr
+    },
     fetchGraphData: async function(groupBy, startTimestamp, endTimestamp, names, host){
       let trafficData = {}
       await settingRequests.fetchTrafficMetrics(groupBy, startTimestamp, endTimestamp, names, host).then((resp)=>{
         trafficData = resp.trafficMetricsMap
       })
       return trafficData
+    },
+    fetchAllMetricsData: async function(startTime, endTime, metricIdPrefix, instanceId) {
+      let metricsData = {}
+      await settingRequests.fetchMetrics(startTime, endTime, metricIdPrefix, instanceId).then((resp) => {
+        console.log("resp", resp)
+        metricsData = resp?.result?.metrics
+      })
+      return metricsData
     },
     testJiraIntegration: async function(userEmail, apiToken, baseUrl, projId){
       let issueTypeMap = {}
@@ -249,7 +264,7 @@ const settingFunctions = {
     fetchJiraIntegration: async function(){
       let jiraInteg = {}
       await settingRequests.fetchJiraIntegration().then((resp)=>{
-        jiraInteg = resp.jiraIntegration
+        jiraInteg = resp
       })
       return jiraInteg
     },
@@ -259,7 +274,104 @@ const settingFunctions = {
       })
       return trafficData
     },
-
+    fetchAzureBoardsIntegration: async function(){
+      let azureBoardsInteg = {}
+      await settingRequests.fetchAzureBoardsIntegration().then((resp)=>{
+        azureBoardsInteg = resp.azureBoardsIntegration
+      })
+      return azureBoardsInteg
+    },
+    addAzureBoardsIntegration: async function(azureBoardsBaseUrl, organization, projectList, personalAuthToken) {
+      let trafficData = {}
+      await settingRequests.addAzureBoardsIntegration(azureBoardsBaseUrl, organization, projectList, personalAuthToken).then((resp)=>{
+        trafficData = resp
+      })
+      return trafficData
+    },
+    removeAzureBoardsIntegration: async function() {
+      let trafficData = {}
+      await settingRequests.removeAzureBoardsIntegration().then((resp)=>{
+        trafficData = resp
+      })
+      return trafficData
+    },
+    fetchAdxIntegration: async function(){
+      let adxInteg = {}
+      await settingRequests.fetchAdxIntegration().then((resp)=>{
+        adxInteg = resp.adxIntegration
+      })
+      return adxInteg
+    },
+    addAdxIntegration: async function(clusterEndpoint, databaseName, tenantId, applicationClientId, applicationKey) {
+        let trafficData = {}
+        await settingRequests.addAdxIntegration(clusterEndpoint, databaseName, tenantId, applicationClientId, applicationKey).then((resp)=>{
+            trafficData = resp
+        })
+        return trafficData
+    },
+    removeAdxIntegration: async function() {
+      let trafficData = {}
+      await settingRequests.removeAdxIntegration().then((resp)=>{
+        trafficData = resp
+      })
+      return trafficData
+    },
+    fetchServiceNowIntegration: async function(){
+      let serviceNowInteg = {}
+      await settingRequests.fetchServiceNowIntegration().then((resp)=>{
+        serviceNowInteg = resp.serviceNowIntegration
+      })
+      return serviceNowInteg
+    },
+    fetchServiceNowTables: async function(instanceUrl, clientId, clientSecret) {
+      let tables = []
+      await settingRequests.fetchServiceNowTables(instanceUrl, clientId, clientSecret).then((resp)=>{
+        tables = resp.tables
+      })
+      return tables
+    },
+    addServiceNowIntegration: async function(instanceUrl, clientId, clientSecret, tableNames) {
+      let trafficData = {}
+      await settingRequests.addServiceNowIntegration(instanceUrl, clientId, clientSecret, tableNames).then((resp)=>{
+        trafficData = resp
+      })
+      return trafficData
+    },
+    removeServiceNowIntegration: async function() {
+      let trafficData = {}
+      await settingRequests.removeServiceNowIntegration().then((resp)=>{
+        trafficData = resp
+      })
+      return trafficData
+    },
+    fetchDevRevIntegration: async function(){
+      let devRevInteg = {}
+      await settingRequests.fetchDevRevIntegration().then((resp)=>{
+        devRevInteg = resp.devrevIntegration
+      })
+      return devRevInteg
+    },
+    fetchDevRevParts: async function(personalAccessToken, partTypes, partName) {
+      let parts = {}
+      await settingRequests.fetchDevRevParts(personalAccessToken, partTypes, partName).then((resp)=>{
+        parts = resp.partsIdToNameMap
+      })
+      return parts
+    },
+    addDevRevIntegration: async function(orgUrl, personalAccessToken, partsMap) {
+      let trafficData = {}
+      await settingRequests.addDevRevIntegration(orgUrl, personalAccessToken, partsMap).then((resp)=>{
+        trafficData = resp
+      })
+      return trafficData
+    },
+    removeDevRevIntegration: async function() {
+      let trafficData = {}
+      await settingRequests.removeDevRevIntegration().then((resp)=>{
+        trafficData = resp
+      })
+      return trafficData
+    },
     getSetupOptions: function(){
       return setupOptions;
     },

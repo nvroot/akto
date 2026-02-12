@@ -1,8 +1,9 @@
-import { Box, Button, Divider, Frame, HorizontalStack, LegacyTabs, Modal, Text, Tooltip} from "@shopify/polaris"
-import {ChevronUpMinor } from "@shopify/polaris-icons"
+import { Badge, Box, Button, Divider, Frame, HorizontalStack, LegacyTabs, Modal, Text, Tooltip, VerticalStack } from "@shopify/polaris"
+import { ChevronUpMinor } from "@shopify/polaris-icons"
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import DropdownSearch from "../../../components/shared/DropdownSearch";
+import TitleWithInfo from "../../../components/shared/TitleWithInfo";
 import api from "../../testing/api"
 import testEditorRequests from "../api";
 import func from "@/util/func";
@@ -13,10 +14,16 @@ import PersistStore from "../../../../main/PersistStore";
 import editorSetup from "./editor_config/editorSetup";
 import SampleData from "../../../components/shared/SampleData";
 import transform from "../../../components/shared/customDiffEditor";
+import testingFunc from "../../testing/transform";
+import { mapLabel, getDashboardCategory } from "../../../../main/labelHelper";
 import EmptySampleApi from "./EmptySampleApi";
+import Store from "../../../store";
+import LocalStore from "../../../../main/LocalStorageStore";
+import observeFunc from "../../observe/transform"
 
 const SampleApi = () => {
 
+    const setToastConfig = Store(state => state.setToastConfig)
     const allCollections = PersistStore(state => state.allCollections);
     const [selected, setSelected] = useState(0);
     const [selectApiActive, setSelectApiActive] = useState(false)
@@ -39,9 +46,38 @@ const SampleApi = () => {
     const defaultRequest = TestEditorStore(state => state.defaultRequest)
     const selectedSampleApi = PersistStore(state => state.selectedSampleApi)
     const setSelectedSampleApi = PersistStore(state => state.setSelectedSampleApi)
+    const selectedRole = TestEditorStore(state => state.selectedRole)
+    const setSelectedRole = TestEditorStore(state => state.setSelectedRole)
 
     const tabs = [{ id: 'request', content: 'Request' }, { id: 'response', content: 'Response'}];
     const mapCollectionIdToName = func.mapCollectionIdToName(allCollections)
+    const [conversationsList, setConversationsList] = useState([])
+
+    const [isChatBotOpen, setIsChatBotOpen] = useState(false)
+    const [chatBotModal, setChatBotModal] = useState(false)
+    const subCategoryMap = LocalStore(state => state.subCategoryMap)
+    const [testRoles, setTestRoles] = useState([])
+    const [testRolesOptions, setTestRolesOptions] = useState([])
+
+    useEffect(() => {
+        const fetchRoles = async () => {
+            try {
+                const response = await api.fetchTestRoles()
+                if (response && response.testRoles) {
+                    setTestRoles(response.testRoles)
+                    // use hexId as value (consistent with RunTestConfiguration) and name as label
+                    const options = response.testRoles.map(role => ({
+                        label: role.name,
+                        value: role.hexId
+                    }))
+                    setTestRolesOptions(options)
+                }
+            } catch (error) {
+                func.setToast(true, true, "Error fetching test roles");
+            }
+        }
+        fetchRoles()
+    }, [])
 
     useEffect(()=>{
         if(showEmptyLayout) return
@@ -58,6 +94,7 @@ const SampleApi = () => {
         setSelectedCollectionId(null)
         setCopyCollectionId(null)
         setTestResult(null)
+        setConversationsList([])
         if(!selectedUrl){
             selectedUrl = defaultRequest
         }
@@ -118,6 +155,7 @@ const SampleApi = () => {
         fetchApiEndpoints(copyCollectionId)
         setCopySelectedApiEndpoint(null);
         setTestResult(null)
+        setConversationsList([])
     }, [copyCollectionId])
 
     useEffect(() => {
@@ -127,15 +165,27 @@ const SampleApi = () => {
             setEditorData({message: ''})
         }
         setTestResult(null)
+        setConversationsList([])
     }, [selectedApiEndpoint])
 
     useEffect(()=> {
         if(testResult){
-            setShowTestResult(true);
+            let temp =  testResult?.agentConversationResults ? testResult?.agentConversationResults?.length > 0 : false;
+            setShowTestResult(!temp);
+            setChatBotModal(temp);
+            
         } else {
             setShowTestResult(false);
         }
     }, [testResult])
+
+    useEffect(()=>{
+        if(currentContent && currentContent.length > 0 && currentContent.includes("test_mode") && currentContent.includes(": agent")) {
+            setIsChatBotOpen(true)
+        }else{
+            setIsChatBotOpen(false)
+        }
+    }, [currentContent])
 
 
     const handleTabChange = (selectedTabIndex) => {
@@ -170,11 +220,12 @@ const SampleApi = () => {
     }
 
     const apiEndpointsOptions = apiEndpoints.map(apiEndpoint => {
-        let str = func.toMethodUrlString(apiEndpoint);
+        let strLabel = func.toMethodUrlString({...apiEndpoint, shouldParse: true});
+        let strValue = func.toMethodUrlString({...apiEndpoint, shouldParse: false});
         return {
-            id: str,
-            label: str,
-            value: str
+            id: strValue,
+            label: strLabel,
+            value: strValue
         }
     })
 
@@ -221,22 +272,77 @@ const SampleApi = () => {
         toggleSelectApiActive()
     }
 
+    const intervalRef = useRef(null);
+
     const runTest = async()=>{
+        if(isChatBotOpen) {
+            setChatBotModal(true)
+            return;
+        }
         setLoading(true)
         const apiKeyInfo = {
             ...func.toMethodUrlObject(selectedApiEndpoint),
             apiCollectionId: selectedCollectionId
         }
 
+
         try {
-            let resp = await testEditorRequests.runTestForTemplate(currentContent,apiKeyInfo,sampleDataList)
-            setTestResult(resp)
+            let resp = await testEditorRequests.runTestForTemplate(currentContent,apiKeyInfo,sampleDataList,selectedRole)
+            if(resp.testingRunPlaygroundHexId !== null && resp?.testingRunPlaygroundHexId !== undefined) {
+                await new Promise((resolve) => {
+                    let maxAttempts = 100;
+                    let pollInterval = 3000;
+                    let attempts = 0;
+    
+                    intervalRef.current = setInterval(async () => {
+                        if (attempts >= maxAttempts) {
+                            clearInterval(intervalRef.current);
+                            intervalRef.current = null;
+                            setToastConfig({ isActive: true, isError: true, message: "Error while running the test" });
+                            resolve();
+                            return;
+                        }
+    
+                        try {
+                            const result = await testEditorRequests.fetchTestingRunPlaygroundStatus(resp?.testingRunPlaygroundHexId);
+                            if (result?.testingRunPlaygroundStatus === "COMPLETED") {
+                                clearInterval(intervalRef.current);
+                                intervalRef.current = null;
+                                setTestResult(result);
+                                resolve();
+                                return;
+                            }
+                        } catch (err) {
+                            console.error("Error fetching updateResult:", err);
+                        }
+    
+                        attempts++;
+                    }, pollInterval);
+                });
+            }
+            else setTestResult(resp)
+            if(resp?.agentConversationResults?.length > 0){
+                let result = testingFunc.prepareConversationsList(resp?.agentConversationResults)
+                setConversationsList(result.conversations)
+            }
         } catch (err){
         }
         setLoading(false)
     }
 
+    useEffect(() => {
+        return () => {
+            if (intervalRef.current) {
+                clearInterval(intervalRef.current);
+            }
+        };
+    }, []);
+
     const showResults = () => {
+        if(testResult?.agentConversationResults?.length > 0){
+            setChatBotModal(!chatBotModal)
+            return;
+        }
         setShowTestResult(!showTestResult);
     }
 
@@ -261,6 +367,9 @@ const SampleApi = () => {
     }
 
     function getResultDescription() {
+        if(isChatBotOpen) {
+            return "Chat with the agent"
+        }
         if (testResult) {
             if(testResult.testingRunResult.vulnerable){
                 let status = func.getRunResultSeverity(testResult.testingRunResult, testResult.subCategoryMap)
@@ -269,7 +378,7 @@ const SampleApi = () => {
                 return "No vulnerability found"
             }
         } else {
-            return "Run test to see Results"
+            return `${mapLabel('Run test', getDashboardCategory())} to see Results`
         }
     }
 
@@ -289,6 +398,8 @@ const SampleApi = () => {
 
     )
 
+    const currentSeverity = selectedTest?.value !== undefined ? subCategoryMap[selectedTest?.value]?.superCategory?.severity._name : "HIGH";
+
     return (
         <div>
             <div className="editor-header">
@@ -298,12 +409,12 @@ const SampleApi = () => {
                 <HorizontalStack gap={2}>
                     <Button id={"select-sample-api"} onClick={toggleSelectApiActive} size="slim">
                         <Box maxWidth="200px">
-                            <Tooltip content={copySelectedApiEndpoint} hoverDelay={"100"}>
-                                <Text variant="bodyMd" truncate>{copySelectedApiEndpoint}</Text>
+                            <Tooltip content={func.toMethodUrlString({...func.toMethodUrlObject(copySelectedApiEndpoint), shouldParse: true})} hoverDelay={"100"}>
+                                <Text variant="bodyMd" truncate>{func.toMethodUrlString({...func.toMethodUrlObject(copySelectedApiEndpoint), shouldParse: true})}</Text>
                             </Tooltip>
                         </Box>
                     </Button>
-                    <Button id={"run-test"} disabled={showEmptyLayout || editorData?.message?.length === 0} loading={loading} primary onClick={runTest} size="slim">Run Test</Button>
+                    <Button id={"run-test"} disabled={showEmptyLayout || editorData?.message?.length === 0} loading={loading} primary onClick={runTest} size="slim">{isChatBotOpen ? "Chat" : mapLabel('Run test', getDashboardCategory())}</Button>
                 </HorizontalStack>
             </div>
 
@@ -347,7 +458,7 @@ const SampleApi = () => {
             <Modal
                 open={selectApiActive}
                 onClose={toggleSelectApiActive}
-                title="Select sample API"
+                title="Select sample API and Test Role"
                 primaryAction={{
                     id:"save",
                     content: 'Save',
@@ -381,11 +492,56 @@ const SampleApi = () => {
                         placeholder="Select API endpoint"
                         optionsList={apiEndpointsOptions}
                         setSelected={setCopySelectedApiEndpoint}
-                        value={copySelectedApiEndpoint==null ? "No endpoints selected" : copySelectedApiEndpoint}
+                        value={copySelectedApiEndpoint==null ? "No endpoints selected" : func.toMethodUrlString({...func.toMethodUrlObject(copySelectedApiEndpoint), shouldParse: true})}
                         preSelected={[copySelectedApiEndpoint]}
                     />
 
+                    <br />
+
+                    <DropdownSearch
+                        id={"select-test-role"}
+                        label={
+                            <TitleWithInfo
+                                titleText="Role"
+                                tooltipContent="Roles support is only available in Akto testing module."
+                                textProps={{ variant: 'bodyMd' }}
+                            />
+                        }
+                        placeholder="Select role"
+                        optionsList={testRolesOptions}
+                        setSelected={setSelectedRole}
+                        value={(() => {
+                            const found = testRolesOptions.find(r => r.value === selectedRole)
+                            return found ? found.label : ''
+                        })()}
+                        preSelected={selectedRole ? [selectedRole] : []}
+                    />
+
                 </Modal.Section>
+            </Modal>
+            <Modal
+                open={chatBotModal}
+                onClose={() => setChatBotModal(false)}
+                title="Chat with the agent"
+                large
+            >
+                
+                <Modal.Section>
+                    <VerticalStack gap={"8"}>
+                        <VerticalStack gap={"4"}>
+                            <Box padding={"4"}>
+                                <HorizontalStack gap={"2"} wrap={false}>
+                                    <Text variant="headingMd" alignment="start" breakWord>{selectedTest?.label}</Text>
+                                    {testResult?.testingRunResult?.vulnerable === true ? <Box className={`badge-wrapper-${currentSeverity}`}><Badge size="medium" status={observeFunc.getColor(currentSeverity)}>{currentSeverity}</Badge></Box> : null}
+                                </HorizontalStack>
+                                <br/>
+                                <Divider/> 
+                            </Box>
+                            
+                        </VerticalStack>
+                    </VerticalStack>
+                </Modal.Section>
+                
             </Modal>
         </div>
     )

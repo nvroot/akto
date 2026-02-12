@@ -1,39 +1,35 @@
 package com.akto.testing_issues;
 
+import static com.akto.util.Constants.ID;
+
 import com.akto.dao.context.Context;
-import com.akto.dao.testing.TestingRunResultDao;
 import com.akto.dao.testing.TestingRunResultSummariesDao;
 import com.akto.dao.testing.sources.TestSourceConfigsDao;
 import com.akto.dao.testing_run_findings.TestingRunIssuesDao;
 import com.akto.dto.test_run_findings.TestingIssuesId;
 import com.akto.dto.test_run_findings.TestingRunIssues;
 import com.akto.dto.testing.TestingRunResult;
-import com.akto.dto.testing.TestingRunResultSummary;
 import com.akto.dto.testing.sources.TestSourceConfig;
 import com.akto.log.LoggerMaker;
 import com.akto.log.LoggerMaker.LogDb;
 import com.akto.testing.TestExecutor;
+import com.akto.testing.kafka_utils.TestingConfigurations;
 import com.akto.testing_utils.TestingUtils;
-import com.akto.util.enums.GlobalEnums;
 import com.akto.util.enums.GlobalEnums.Severity;
 import com.akto.util.enums.GlobalEnums.TestRunIssueStatus;
-import com.mongodb.bulk.BulkWriteResult;
-import com.mongodb.client.model.*;
-
-import org.bson.BsonDocument;
-import org.bson.conversions.Bson;
-import org.bson.types.ObjectId;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
+import com.mongodb.client.model.BulkWriteOptions;
+import com.mongodb.client.model.Filters;
+import com.mongodb.client.model.InsertOneModel;
+import com.mongodb.client.model.UpdateOneModel;
+import com.mongodb.client.model.Updates;
+import com.mongodb.client.model.WriteModel;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicReference;
-
-import static com.akto.util.Constants.ID;
-import static com.akto.util.enums.GlobalEnums.*;
+import org.bson.BsonDocument;
+import org.bson.conversions.Bson;
+import org.bson.types.ObjectId;
 
 public class TestingIssuesHandler {
 
@@ -47,7 +43,8 @@ public class TestingIssuesHandler {
 
     private void writeUpdateQueryIntoWriteModel(List<WriteModel<TestingRunIssues>> writeModelList,
                                                 Map<TestingIssuesId, TestingRunResult> testingIssuesIdsMap,
-                                                List<TestingRunIssues> testingRunIssuesList) {
+                                                List<TestingRunIssues> testingRunIssuesList,
+                                                boolean doNotMarkIssuesAsFixed) {
         int lastSeen = Context.now();
 
         testingRunIssuesList.forEach(testingRunIssues -> {
@@ -65,14 +62,28 @@ public class TestingIssuesHandler {
                 updateStatusFields = new BsonDocument();
             } else if (runResult.isVulnerable()) {
                 updateStatusFields = Updates.set(TestingRunIssues.TEST_RUN_ISSUES_STATUS, TestRunIssueStatus.OPEN);
+            } else if (doNotMarkIssuesAsFixed) {
+                // Don't mark as FIXED if the test run has the "do not mark issues as fixed" flag set
+                updateStatusFields = new BsonDocument();
             } else {
                 updateStatusFields = Updates.set(TestingRunIssues.TEST_RUN_ISSUES_STATUS, TestRunIssueStatus.FIXED);
             }
 
+            // Check if severity was manually updated by a user
+            // If lastUpdatedBy is set and not null, it means a user manually changed the severity
+            // In that case, preserve the user's preference and don't overwrite it
+            boolean wasManuallySeverityUpdated = testingRunIssues.getLastUpdatedBy() != null &&
+                                                  !testingRunIssues.getLastUpdatedBy().isEmpty();
+
             // name = cateogry
             String subCategory = runResult.getTestSubType();
 
-            if (subCategory.startsWith("http")) {//TestSourceConfig case
+            if (wasManuallySeverityUpdated) {
+                // Preserve user's manual severity change
+                updateSeverityField = new BsonDocument();
+                loggerMaker.debugAndAddToDb(String.format("Preserving manual severity update for issue %s (last updated by: %s)",
+                    issuesId, testingRunIssues.getLastUpdatedBy()), LogDb.TESTING);
+            } else if (subCategory.startsWith("http")) {//TestSourceConfig case
                 TestSourceConfig config = TestSourceConfigsDao.instance.getTestSourceConfig(runResult.getTestSubType());
                 updateSeverityField = Updates.set(TestingRunIssues.KEY_SEVERITY, config.getSeverity());
             } else {//TestSubCategory case
@@ -87,7 +98,7 @@ public class TestingIssuesHandler {
                     Updates.set(TestingRunIssues.LAST_SEEN, lastSeen),
                     Updates.set(TestingRunIssues.LATEST_TESTING_RUN_SUMMARY_ID, runResult.getTestRunResultSummaryId())
             );
-            loggerMaker.infoAndAddToDb(String.format("Updating the issue with id %s, with update parameters and result_summary_Id :%s ", issuesId
+            loggerMaker.debugAndAddToDb(String.format("Updating the issue with id %s, with update parameters and result_summary_Id :%s ", issuesId
                     ,runResult.getTestRunResultSummaryId()), LogDb.TESTING);
 
             writeModelList.add(new UpdateOneModel<>(query, updateFields));
@@ -125,7 +136,7 @@ public class TestingIssuesHandler {
             }
 
             if(!runResult.isVulnerable()){
-                break;
+                continue; // skip if not vulnerable
             }
 
             boolean shouldCountIssue = false;
@@ -160,7 +171,7 @@ public class TestingIssuesHandler {
                             severity,
                             TestRunIssueStatus.OPEN, lastSeen, lastSeen, runResult.getTestRunResultSummaryId(),null, lastSeen, true))); // todo: take value from yaml
                 }
-                loggerMaker.infoAndAddToDb(String.format("Inserting the id %s , with summary Id as %s", testingIssuesId, runResult.getTestRunResultSummaryId()), LogDb.TESTING);
+                loggerMaker.debugAndAddToDb(String.format("Inserting the id %s , with summary Id as %s", testingIssuesId, runResult.getTestRunResultSummaryId()), LogDb.TESTING);
             }
         };
 
@@ -180,27 +191,22 @@ public class TestingIssuesHandler {
 
     public void handleIssuesCreationFromTestingRunResults(List<TestingRunResult> testingRunResultList, boolean triggeredByTestEditor) {
 
+        // makes the map of issueId to result {no db call}
         Map<TestingIssuesId, TestingRunResult> testingIssuesIdsMap = TestingUtils.
                 listOfIssuesIdsFromTestingRunResults(testingRunResultList, true, triggeredByTestEditor);
 
-        // loggerMaker.infoAndAddToDb(String.format("Total issue id created from TestingRunResult map : %s", testingIssuesIdsMap.size()), LogDb.TESTING);
         Bson inQuery = Filters.in(ID, testingIssuesIdsMap.keySet().toArray());
         List<TestingRunIssues> testingRunIssuesList = TestingRunIssuesDao.instance.findAll(inQuery);
 
-        // loggerMaker.infoAndAddToDb(String.format("Total list of issues from db : %s", testingRunIssuesList.size()), LogDb.TESTING);
         List<WriteModel<TestingRunIssues>> writeModelList = new ArrayList<>();
-        writeUpdateQueryIntoWriteModel(writeModelList, testingIssuesIdsMap, testingRunIssuesList);
-        // loggerMaker.infoAndAddToDb(String.format("Total write queries after the update iterations: %s", writeModelList.size()), LogDb.TESTING);
+        // this will create only the updates {status and summaryId change} for existing issues only
+        writeUpdateQueryIntoWriteModel(writeModelList, testingIssuesIdsMap, testingRunIssuesList, TestingConfigurations.getInstance().getDoNotMarkIssuesAsFixed());
+
+
         insertVulnerableTestsIntoIssuesCollection(writeModelList, testingIssuesIdsMap, testingRunIssuesList);
-        // loggerMaker.infoAndAddToDb(String.format("Total write queries after the insertion iterations: %s", writeModelList.size()), LogDb.TESTING);
         try {
             if (writeModelList.size() > 0) {
-                BulkWriteResult result = TestingRunIssuesDao.instance.bulkWrite(writeModelList, new BulkWriteOptions().ordered(false));
-                // loggerMaker.infoAndAddToDb(String.format("Matched records : %s", result.getMatchedCount()), LogDb.TESTING);
-                // loggerMaker.infoAndAddToDb(String.format("inserted counts : %s", result.getInsertedCount()), LogDb.TESTING);
-                // loggerMaker.infoAndAddToDb(String.format("Modified counts : %s", result.getModifiedCount()), LogDb.TESTING);
-            } else {
-                // loggerMaker.infoAndAddToDb("writeModelList is empty", LogDb.TESTING);
+                TestingRunIssuesDao.instance.bulkWrite(writeModelList, new BulkWriteOptions().ordered(false));
             }
         } catch (Exception e) {
             loggerMaker.errorAndAddToDb(String.format("Error while inserting issues into db: %s", e.toString()), LogDb.TESTING);

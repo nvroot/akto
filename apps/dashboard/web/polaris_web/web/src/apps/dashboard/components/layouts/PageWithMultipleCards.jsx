@@ -1,8 +1,10 @@
 import {  HorizontalStack,  Page, VerticalStack } from "@shopify/polaris";
 import { useNavigate, useLocation } from "react-router-dom";
 import { learnMoreObject } from "../../../main/onboardingData"
+import { getDashboardCategory } from "../../../main/labelHelper"
 import LearnPopoverComponent from "./LearnPopoverComponent";
 import func from  "@/util/func"
+import { useEffect, useRef } from "react";
 
 const PageWithMultipleCards = (props) => {
 
@@ -12,8 +14,41 @@ const PageWithMultipleCards = (props) => {
     const navigate = useNavigate()
     const isNewTab = location.key==='default' || !(window.history.state && window.history.state.idx > 0)
 
+    const prevPathRef = useRef();
+
+    // Track pathnames in sessionStorage
+    const MAX_STACK_SIZE = 50; // Maximum number of entries in the stack
+
+    useEffect(() => {
+        let stack = JSON.parse(sessionStorage.getItem('pathnameStack') || '[]');
+        const currentPath = location.pathname;
+        if (stack.length === 0 || stack[stack.length - 1] !== currentPath) {
+            stack.push(currentPath);
+            // Trim the stack to the maximum size
+            if (stack.length > MAX_STACK_SIZE) {
+                stack.shift(); // Remove the oldest entry
+            }
+            sessionStorage.setItem('pathnameStack', JSON.stringify(stack));
+        }
+        prevPathRef.current = currentPath;
+    }, [location.pathname]);
+
+    // Custom navigateBack: skip over same-pathname entries
     const navigateBack = () => {
-        navigate(-1)
+        let stack = JSON.parse(sessionStorage.getItem('pathnameStack') || '[]');
+        const currentPath = location.pathname;
+        // Remove current path
+        while (stack.length > 0 && stack[stack.length - 1] === currentPath) {
+            stack.pop();
+        }
+        // Find last different path
+        const lastDifferent = stack.length > 0 ? stack[stack.length - 1] : null;
+        sessionStorage.setItem('pathnameStack', JSON.stringify(stack));
+        if (lastDifferent && lastDifferent !== currentPath) {
+            navigate(lastDifferent);
+        } else {
+            navigate(-1);
+        }
     }
 
     function getBackAction() {
@@ -24,16 +59,65 @@ const PageWithMultipleCards = (props) => {
     }
 
 
-    const learnMoreObj = learnMoreObject.hasOwnProperty(func.transformString(location.pathname)) ? learnMoreObject[func.transformString(location.pathname)] : null
+    const pathKey = func.transformString(location.pathname)
+    const category = getDashboardCategory()
+    const categoryKey = category?.toLowerCase().replace(/ /g, '_')
+
+    let learnMoreObj = null
+    let pageData = learnMoreObject?.[pathKey]
+
+    // Fallback for sensitive data types - if specific type not found, use generic datatype config
+    if (!pageData && pathKey.startsWith('dashboard_observe_sensitive_') && pathKey !== 'dashboard_observe_sensitive') {
+        pageData = learnMoreObject?.['dashboard_observe_sensitive_datatype']
+    }
+
+    // Fallback for DAST: use API Security docs if DAST docs don't exist
+    if (pageData && categoryKey === 'dast' && !pageData[categoryKey] && pageData['api_security']) {
+        pageData = { ...pageData, dast: pageData['api_security'] };
+    }
+
+    if (pageData) {
+        // Check if category-specific data exists
+        if (pageData[categoryKey] && typeof pageData[categoryKey] === 'object') {
+            // Use ONLY category-specific data (no merge with root-level)
+            const categoryData = pageData[categoryKey]
+            learnMoreObj = {
+                title: categoryData.title,
+                description: categoryData.description,
+                docsLink: Array.isArray(categoryData.docsLink) ? categoryData.docsLink : [],
+                videoLink: Array.isArray(categoryData.videoLink) ? categoryData.videoLink : []
+            }
+        } else {
+            // Fallback to root-level data (for categories without specific config)
+            // Only if root-level arrays actually exist
+            const hasRootDocs = Array.isArray(pageData.docsLink);
+            const hasRootVideos = Array.isArray(pageData.videoLink);
+
+            if (hasRootDocs || hasRootVideos) {
+                learnMoreObj = {
+                    title: pageData.title,
+                    description: pageData.description,
+                    docsLink: hasRootDocs ? pageData.docsLink : [],
+                    videoLink: hasRootVideos ? pageData.videoLink : []
+                }
+            }
+        }
+    }
+
+    // Check if learnMoreObj has actual content (non-empty docs or videos)
+    const hasContent = learnMoreObj && (
+        (learnMoreObj.docsLink && learnMoreObj.docsLink.length > 0) ||
+        (learnMoreObj.videoLink && learnMoreObj.videoLink.length > 0)
+    )
 
     const learnMoreComp = (
-        learnMoreObj ?
-        <LearnPopoverComponent learnMoreObj={learnMoreObj} /> : null
+        hasContent ?
+            <LearnPopoverComponent learnMoreObj={learnMoreObj} /> : null
     )
 
     const useSecondaryActions = (
         <HorizontalStack gap={2}>
-            {learnMoreObj ? learnMoreComp : null }
+            {learnMoreComp}
             {secondaryActions}
         </HorizontalStack>
     )
@@ -47,8 +131,9 @@ const PageWithMultipleCards = (props) => {
             divider={divider}
         >
             <VerticalStack gap="4">
-                {components?.filter((component) => {
-                    return component
+                {components?.map((component, index) => {
+                    // If component already has a key, return as is, otherwise add index-based key
+                    return component;
                 })}
             </VerticalStack>
         </Page>

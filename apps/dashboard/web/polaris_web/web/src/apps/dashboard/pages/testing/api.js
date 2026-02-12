@@ -34,13 +34,22 @@ export default {
         })
         return resp        
     },
-    async fetchTestRunResultsCount(testingRunResultSummaryHexId) {
+    async fetchTestRunResultsCount(testingRunResultSummaryHexId, filters) {
         const resp = await request({
             url: '/api/fetchTestRunResultsCount',
             method: 'post',
             data: {
-                testingRunResultSummaryHexId
+                testingRunResultSummaryHexId,
+                filters
             }
+        })
+        return resp        
+    },
+    async fetchTestResultsStatsCount(data) {
+        const resp = await request({
+            url: '/api/fetchTestResultsStatsCount',
+            method: 'post',
+            data: data
         })
         return resp        
     },
@@ -49,6 +58,17 @@ export default {
             url: 'api/fetchRemediationInfo',
             method: 'post',
             data: {testId}
+        })
+        return resp
+    },
+    async analyzeVulnerability(responseOutput, analysisType = 'redteaming') {
+        const resp = await request({
+            url: '/api/analyze_vulnerability',
+            method: 'post',
+            data: {
+                requestData: responseOutput,
+                analysisType: analysisType
+            }
         })
         return resp
     },
@@ -210,7 +230,18 @@ export default {
         const resp = await request({
             url: '/api/updateTestRoles',
             method: 'post',
-            data: { roleName, andConditions, orConditions }
+            data: { roleName, andConditions, orConditions}
+        })
+        return resp        
+    },
+    async saveTestRoleMeta(roleName, scopeRoles) {
+        if(scopeRoles && scopeRoles.length === 0){
+            return;
+        }
+        const resp = await request({
+            url: '/api/saveTestRoleMeta',
+            method: 'post',
+            data: { roleName, scopeRoles}
         })
         return resp        
     },
@@ -240,11 +271,11 @@ export default {
         return resp
     },
 
-    async getCountsMap(startTimestamp, endTimestamp){
+    async getCountsMap(startTimestamp, endTimestamp, filters){
         return await request({
             url: '/api/getAllTestsCountMap',
             method: 'post',
-            data: {startTimestamp, endTimestamp}
+            data: {startTimestamp, endTimestamp, filters}
         })
     },
 
@@ -443,11 +474,11 @@ export default {
             data: {}
         })
     },
-    downloadReportPDF(reportId, organizationName, reportDate, reportUrl, firstPollRequest) {
+    downloadReportPDF(reportId, organizationName, reportDate, reportUrl, username, firstPollRequest) {
         return request({
             url: '/api/downloadReportPDF',
             method: 'post',
-            data: {reportId, organizationName, reportDate, reportUrl, firstPollRequest}
+            data: {reportId, organizationName, reportDate, reportUrl, username, firstPollRequest}
         })
     },
     fetchScript() {
@@ -476,13 +507,6 @@ export default {
             url: '/api/updateIgnoreTimeForSummaries',
             method: 'post',
             data: {deltaTimeForScheduledSummaries}
-        })
-    },
-    fetchIssuesByStatusAndSummaryId(latestTestingRunSummaryId, issueStatusQuery, sortKey, sortOrder, skip, limit, filters) {
-        return request({
-            url: '/api/fetchIssuesByStatusAndSummaryId',
-            method: 'post',
-            data: { latestTestingRunSummaryId, issueStatusQuery, sortKey, sortOrder, skip, limit, filters }
         })
     },
     modifyTestingRunConfig(testingRunConfigId, editableTestingRunConfig) {
@@ -558,5 +582,81 @@ export default {
             method: 'post',
             data: {testSuiteHexId}
         })
-    }
+    },
+    fetchMiniTestingServiceNames() {
+        return request({
+            url: '/api/fetchMiniTestingServiceNames',
+            method: 'post',
+            data: {}
+        })
+    },
+    updateIssueDescription(issueId, description) {
+        return request({
+            url: '/api/updateIssueDescription',
+            method: 'post',
+            data: { issueId, description }
+        })
+    },
+    fetchCommonTestTemplate() {
+        return request({
+            url: '/api/fetchCommonTestTemplate',
+            method: 'post',
+            data: {}
+        })
+    },
+    saveCommonTestTemplate(content) {
+        return request({
+            url: '/api/saveCommonTestTemplate',
+            method: 'post',
+            data: { content }
+        })
+    },
+    allTestsCountsRanges() {
+        return request({
+            url: '/api/fetchTestingRunsRanges',
+            method: 'post',
+            data: {}
+        })
+    },
+    getUniqueHostsTested(testingRunId) {
+        return request({
+            url: '/api/getUniqueHostsTested',
+            method: 'post',
+            data: { testingRunId }
+        })
+    },
+    async fetchCategoryWiseScores(startTimestamp, endTimestamp, dashboardCategory, dataSource = 'testing') {
+        const resp = await request({
+            url: '/api/fetchCategoryWiseScores',
+            method: 'post',
+            data: {
+                startTimestamp,
+                endTimestamp,
+                dashboardCategory,
+                dataSource
+            }
+        })
+        return resp
+    },
+    async fetchConversationsFromConversationId(conversationId) {
+        const resp = await request({
+            url: '/api/fetchConversationsFromConversationId',
+            method: 'post',
+            data: {
+                conversationId
+            }
+        })
+        return resp
+    },
+    async bulkUpdateTestResultsSeverity(testingRunResultHexIds, severityToBeUpdated) {
+        const resp = await request({
+            url: '/api/bulkUpdateTestResultsSeverity',
+            method: 'post',
+            data: {
+                testingRunResultHexIds,
+                severityToBeUpdated
+            }
+        })
+        return resp
+    },
 }

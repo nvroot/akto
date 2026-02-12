@@ -99,10 +99,23 @@
    --color-delete: #f93e3e ;
    --color-head: #9012fe ;
    --color-patch: #50e3c2 ;
+   --color-tool: #49cc90;    /* green — active/action-oriented, like POST */
+   --color-resource: #61affe; /* blue — data/info-oriented, like GET */
+   --color-prompt: #bc6ff1;   /* purple — creative/conversational */
+   --color-server: #f59b42;   /* red — server/infrastructure-oriented */
+
    --color-disabled: #ebebeb ;
    --color-options: #0d5aa7 ;
    --color-success-new: #008060;
    --white: #ffffff;
+   --borderShadow-box-shadow: #AEB4B9;
+   --inset-box-shadow: 0px 1px 0px 0px #898F94 inset;
+   --agent-grey-background: #F6F6F7;
+
+   --text-default: #202223;
+   --text-subdued: #6D7175;
+
+   --background-selected: #EDEEEF;
 
     --p-color-bg-primary: var(--akto-primary) !important;
     --p-color-bg-primary-hover: #5400CB !important;
@@ -118,9 +131,12 @@
     --p-color-icon-primary: var(--akto-primary) !important;
     --p-color-bg-interactive-selected: #F6F6F7 !important;
 
-    --p-color-bg-critical-subdued: #FED3D1 !important;
-    --p-color-bg-caution-subdued: #FFD79D !important;
+    --p-color-bg-critical-subdued: #FFF4F4 !important;
+    --p-color-bg-caution-subdued: #FFF5EA !important;
     --p-color-bg-info-subdued: #A4E8F2 !important;
+
+    --p-color-bg-magic-subdued-active: #FAFAFA !important;
+    --p-color-bg-app-hover: #F6F6F7 !important;
 }
 
 .Polaris-Page{
@@ -222,4 +238,31 @@
     background-color: #E4E5E7;
     color: #202223 !important;
     font-weight: 550 !important;
+}
+
+.action-item-card-actions .Polaris-Modal-CloseButton{
+    margin-left: 0px !important;
+    padding: 4px !important;
+}
+/* Remove padding from Frame's Box wrapper for ask-ai route */
+.dashboard.ask-ai-route .Polaris-Frame__Content > .Polaris-Box {
+    padding: 0 !important;
+    --pc-box-padding-block-end-xs: 0 !important;
+    --pc-box-padding-block-start-xs: 0 !important;
+    --pc-box-padding-inline-start-xs: 0 !important;
+    --pc-box-padding-inline-end-xs: 0 !important;
+}
+
+/* Ask AI gradient text in left nav (only when on ask-ai route) */
+.ask-ai-route .Polaris-Navigation__Item--selected .Polaris-Navigation__Text {
+    background: linear-gradient(90deg, rgba(98, 0, 234, 0.67) 0%, #18A4EA 100%);
+    background-clip: text;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+/* Ask Akto selected nav item styling */
+.ask-ai-route .Polaris-Navigation__Item--selected {
+    border-radius: 4px;
+    background: var(--Background-Selected, #EDEEEF);
 }

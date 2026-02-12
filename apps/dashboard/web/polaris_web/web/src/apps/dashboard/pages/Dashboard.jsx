@@ -6,9 +6,10 @@ import { useEffect, useState, useRef} from "react";
 import { Frame, Toast, VerticalStack, Banner, Button, Text } from "@shopify/polaris";
 import "./dashboard.css"
 import func from "@/util/func"
+import values from "@/util/values";
 import transform from "./testing/transform";
 import PersistStore from "../../main/PersistStore";
-import LocalStore from "../../main/LocalStorageStore";
+import LocalStore, { localStorePersistSync } from "../../main/LocalStorageStore";
 import ConfirmationModal from "../components/shared/ConfirmationModal";
 import AlertsBanner from "./AlertsBanner";
 import dashboardFunc from "./transform";
@@ -16,6 +17,8 @@ import homeRequests from "./home/api";
 import WelcomeBackDetailsModal from "../components/WelcomeBackDetailsModal";
 import useTable from "../components/tables/TableContext";
 import threatDetectionRequests from "./threat_detection/api";
+import SessionStore from "../../main/SessionStore";
+import { updateThreatFiltersStore } from "./threat_detection/utils/threatFilters";
 
 function Dashboard() {
 
@@ -24,9 +27,9 @@ function Dashboard() {
     history.navigate = useNavigate();
     const setAllCollections = PersistStore(state => state.setAllCollections)
     const setCollectionsMap = PersistStore(state => state.setCollectionsMap)
+    const setTagCollectionsMap = PersistStore(state => state.setTagCollectionsMap)
     const setHostNameMap = PersistStore(state => state.setHostNameMap)
-    const threatFiltersMap = PersistStore(state => state.threatFiltersMap);
-    const setThreatFiltersMap = PersistStore(state => state.setThreatFiltersMap);
+    const threatFiltersMap = SessionStore(state => state.threatFiltersMap);
 
     const { selectItems } = useTable()
 
@@ -41,12 +44,20 @@ function Dashboard() {
     const sendEventOnLogin = LocalStore(state => state.sendEventOnLogin)
     const setSendEventOnLogin = LocalStore(state => state.setSendEventOnLogin)
     const fetchAllCollections = async () => {
-        let apiCollections = await homeFunctions.getAllCollections()
+        let apiCollections = []
+        if(allCollections && allCollections.length > 0){
+            apiCollections = allCollections
+        }else{
+            apiCollections = await homeFunctions.getAllCollections()
+            setAllCollections(apiCollections)
+        }
+        apiCollections = apiCollections.filter((x) => x?.deactivated !== true)
         const allCollectionsMap = func.mapCollectionIdToName(apiCollections)
         const allHostNameMap = func.mapCollectionIdToHostName(apiCollections)
+        const allTagCollectionsMap = func.mapCollectionIdsToTagName(apiCollections)
         setHostNameMap(allHostNameMap)
         setCollectionsMap(allCollectionsMap)
-        setAllCollections(apiCollections)
+        setTagCollectionsMap(allTagCollectionsMap)
     }
     const trafficAlerts = PersistStore(state => state.trafficAlerts)
     const setTrafficAlerts = PersistStore(state => state.setTrafficAlerts)
@@ -68,13 +79,7 @@ function Dashboard() {
 
     const fetchFilterYamlTemplates = () => {
         threatDetectionRequests.fetchFilterYamlTemplate().then((res) => {
-            let finalMap = {}
-            res.templates.forEach((x) => {
-                let trimmed = {...x, content: '', ...x.info}
-                delete trimmed['info']
-                finalMap[x.id] = trimmed;
-            })
-            setThreatFiltersMap(finalMap)
+            updateThreatFiltersStore(res?.templates || [])
         })
     }
 
@@ -92,13 +97,13 @@ function Dashboard() {
     },[trafficAlerts.length])
 
     useEffect(() => {
-        if((allCollections && allCollections.length === 0) || (Object.keys(collectionsMap).length === 0)){
+        if(((allCollections && allCollections.length === 0) || (Object.keys(collectionsMap).length === 0)) && location.pathname !== "/dashboard/observe/inventory"){
             fetchAllCollections()
         }
         if (!subCategoryMap || (Object.keys(subCategoryMap).length === 0)) {
             fetchMetadata();
         }
-        if(!threatFiltersMap && func.isDemoAccount()){
+        if(Object.keys(threatFiltersMap).length === 0 && window?.STIGG_FEATURE_WISE_ALLOWED?.THREAT_DETECTION?.isGranted){
             fetchFilterYamlTemplates()
         }
         if(window.Beamer){
@@ -113,6 +118,23 @@ function Dashboard() {
                 }
             }
         }
+
+        Object.keys(sessionStorage).forEach((key) => {
+            if (key === "undefined" || key === "persistedStore") {
+                sessionStorage.removeItem(key);
+            }
+        });
+        Object.keys(localStorage).forEach((key) => {
+            if (key === "undefined") {
+                localStorage.removeItem(key);
+            }
+        });
+
+        const cleanUpLocalStorePersistSync = localStorePersistSync(LocalStore);
+
+        return () => {
+            cleanUpLocalStorePersistSync();
+        };
     }, [])
 
     useEffect(() => {
@@ -157,6 +179,9 @@ function Dashboard() {
     }
 
     const refreshFunc = () => {
+        if (values.DISABLED_AUTO_ACCOUNT_REFRESH.includes(window.ACTIVE_ACCOUNT)){
+            return;
+        }
         if(document.visibilityState === 'hidden'){
             PersistStore.getState().resetAll();
             LocalStore.getState().resetStore();
@@ -180,20 +205,22 @@ function Dashboard() {
         }
     };
 
-    // useEffect(() => {
-    //     initializeTimer();
-    //     document.addEventListener('visibilitychange', handleVisibilityChange);
-    //     return () => {
-    //         document.removeEventListener('visibilitychange', handleVisibilityChange);
-    //         clearTimeout(timeoutRef.current);
-    //     };
+    useEffect(() => {
+        initializeTimer();
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        return () => {
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+            clearTimeout(timeoutRef.current);
+        };
 
-    // },[])
+    },[])
 
     const shouldShowWelcomeBackModal = window.IS_SAAS === "true" && window?.USER_NAME?.length > 0 && (window?.USER_FULL_NAME?.length === 0 || (window?.USER_ROLE === 'ADMIN' && window?.ORGANIZATION_NAME?.length === 0))
 
+    const isAskAiRoute = location.pathname.includes('/ask-ai')
+
     return (
-        <div className="dashboard">
+        <div className={`dashboard ${isAskAiRoute ? 'ask-ai-route' : ''}`}>
         <Frame>
             <Outlet />
             {shouldShowWelcomeBackModal && <WelcomeBackDetailsModal isAdmin={window.USER_ROLE === 'ADMIN'} />}
@@ -214,7 +241,7 @@ function Dashboard() {
                         })}
                     </VerticalStack>
             </div> : null}
-            {func.checkLocal() && !(location.pathname.includes("test-editor") || location.pathname.includes("settings") || location.pathname.includes("onboarding") || location.pathname.includes("summary")) ?<div className="call-banner" style={{marginBottom: "1rem"}}>
+            {func.checkLocal() && !(location.pathname.includes("test-editor") || location.pathname.includes("settings") || location.pathname.includes("onboarding") || location.pathname.includes("summary") || location.pathname.includes("report")) ?<div className="call-banner" style={{marginBottom: "1rem"}}>
                 <Banner hideIcon={true}>
                     <Text variant="headingMd">Need a 1:1 experience?</Text>
                     <Button plain monochrome onClick={() => {
@@ -227,6 +254,20 @@ function Dashboard() {
                     <Text variant="bodyMd">{window.TRIAL_MSG}</Text>
                 </Banner>
             </div> : null}
+            {location.pathname.includes("agent-team") && window.AGENTTRIAL_MSG ? (
+                <div className="call-banner">
+                    <Banner hideIcon={true}>
+                        <Text variant="bodyMd">{window.AGENTTRIAL_MSG}</Text>
+                    </Banner>
+                </div>
+            ) : null}
+            {location.pathname.startsWith("/dashboard/protection/") && window.PROTECTIONTRIAL_MSG ? (
+                <div className="call-banner">
+                    <Banner hideIcon={true}>
+                        <Text variant="bodyMd">{window.PROTECTIONTRIAL_MSG}</Text>
+                    </Banner>
+                </div>
+            ) : null}
         </Frame>
         </div>
     )

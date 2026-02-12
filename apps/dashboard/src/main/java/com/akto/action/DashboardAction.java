@@ -4,15 +4,20 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.regex.Pattern;
-
+import java.util.stream.Collectors;
 
 import com.akto.dao.*;
 import com.akto.dao.billing.OrganizationsDao;
+import com.akto.dao.test_editor.YamlTemplateDao;
 import com.akto.dto.*;
+import com.akto.dto.ApiInfo.ApiInfoKey;
 import com.akto.dto.billing.Organization;
 import com.akto.dto.rbac.UsersCollectionsList;
+import com.akto.dto.test_editor.YamlTemplate;
 import com.akto.dto.test_run_findings.TestingRunIssues;
+import com.akto.dto.test_run_findings.TestingIssuesId;
 import com.akto.dto.type.SingleTypeInfo;
+import com.akto.dto.type.URLMethods.Method;
 import com.akto.util.enums.GlobalEnums;
 import com.mongodb.client.model.*;
 import org.bson.conversions.Bson;
@@ -31,6 +36,8 @@ import com.mongodb.BasicDBObject;
 import com.mongodb.client.MongoCursor;
 import com.opensymphony.xwork2.Action;
 
+import lombok.Setter;
+
 import static com.akto.dto.test_run_findings.TestingRunIssues.KEY_SEVERITY;
 
 public class DashboardAction extends UserAction {
@@ -43,6 +50,7 @@ public class DashboardAction extends UserAction {
     private int totalActivities;
     private Map<String,ConnectionInfo> integratedConnectionsInfo = new HashMap<>();
     private String connectionSkipped;
+    private boolean showIssues;
 
     private static final LoggerMaker loggerMaker = new LoggerMaker(DashboardAction.class, LogDb.DASHBOARD);
 
@@ -134,7 +142,7 @@ public class DashboardAction extends UserAction {
         try {
             List<Integer> collectionIds = UsersCollectionsList.getCollectionsIdForUser(Context.userId.get(), Context.accountId.get());
             if(collectionIds != null) {
-                pipeline.add(Aggregates.match(Filters.in(SingleTypeInfo._COLLECTION_IDS, collectionIds)));
+                pipeline.add(Aggregates.match(Filters.in(TestingRunIssuesDao.instance.getFilterKeyString(), collectionIds)));
             }
         } catch(Exception e){
         }
@@ -173,6 +181,149 @@ public class DashboardAction extends UserAction {
 
         return SUCCESS.toUpperCase();
     }
+    public String fetchIssuesByApis() {
+        BasicDBObject finalResponse = new BasicDBObject();
+
+        List<String> categories = (categoryTypes == null || categoryTypes.isEmpty())
+            ? Collections.singletonList(null)
+            : categoryTypes;
+
+        for (String categoryType : categories) {
+            BasicDBObject result = new BasicDBObject();
+            List<Bson> basePipeline = new ArrayList<>();
+            Bson filterQ = UsageMetricCalculator.excludeDemosAndDeactivated(TestingRunIssues.ID_API_COLLECTION_ID);
+
+            if (categoryType != null && !categoryType.isEmpty()) {
+                List<YamlTemplate> yamlTemplates = YamlTemplateDao.instance.findAll(
+                    Filters.eq("info.category.name", categoryType)
+                );
+                Set<String> testIds = yamlTemplates.stream()
+                    .map(YamlTemplate::getId)
+                    .collect(Collectors.toSet());
+
+                if (!testIds.isEmpty()) {
+                    basePipeline.add(Aggregates.match(Filters.in(
+                        Constants.ID + "." + TestingIssuesId.TEST_SUB_CATEGORY,
+                        testIds
+                    )));
+                } else {
+                    result.put("countByAPIs", new HashMap<>());
+                    if (this.showIssues) {
+                        result.put("issueNamesByAPIs", new ArrayList<>());
+                    }
+                    if (categories.size() == 1) {
+                        this.response = result;
+                        return SUCCESS.toUpperCase();
+                    }
+                    finalResponse.put(categoryType, result);
+                    continue;
+                }
+            }
+
+            basePipeline.add(
+                Aggregates.match(Filters.and(
+                    Filters.eq(TestingRunIssues.TEST_RUN_ISSUES_STATUS, GlobalEnums.TestRunIssueStatus.OPEN),
+                    filterQ
+                ))
+            );
+
+            try {
+                List<Integer> collectionIds = UsersCollectionsList.getCollectionsIdForUser(
+                    Context.userId.get(), Context.accountId.get()
+                );
+                if (collectionIds != null) {
+                    basePipeline.add(Aggregates.match(Filters.in(TestingRunIssuesDao.instance.getFilterKeyString(), collectionIds)));
+                }
+            } catch (Exception e) {
+            }
+
+            BasicDBObject groupedId = new BasicDBObject(SingleTypeInfo._URL, "$" + TestingRunIssues.ID_URL)
+                .append(SingleTypeInfo._METHOD, "$" + TestingRunIssues.ID_METHOD)
+                .append(SingleTypeInfo._API_COLLECTION_ID, "$" + TestingRunIssues.ID_API_COLLECTION_ID);
+
+            List<BsonField> groupAccumulators = new ArrayList<>();
+            groupAccumulators.add(Accumulators.sum("count", 1));
+            if (this.showIssues) {
+                String subCategoryPath = Constants.ID + "." + TestingIssuesId.TEST_SUB_CATEGORY;
+                groupAccumulators.add(Accumulators.addToSet("issueNames", "$" + subCategoryPath));
+            }
+
+            List<Bson> pipeline = new ArrayList<>(basePipeline);
+            pipeline.add(Aggregates.group(groupedId, groupAccumulators.toArray(new BsonField[0])));
+
+            MongoCursor<BasicDBObject> cursor = TestingRunIssuesDao.instance
+                .getMCollection()
+                .aggregate(pipeline, BasicDBObject.class)
+                .cursor();
+
+            Map<ApiInfoKey, Integer> countByAPIs = new HashMap<>();
+            Map<ApiInfoKey, List<String>> issueNamesByKey = new HashMap<>();
+            List<BasicDBObject> idDocsForIssueNames = new ArrayList<>();
+
+            while (cursor.hasNext()) {
+                BasicDBObject doc = cursor.next();
+                BasicDBObject id = (BasicDBObject) doc.get("_id");
+                ApiInfoKey key = new ApiInfoKey(
+                    id.getInt(SingleTypeInfo._API_COLLECTION_ID),
+                    id.getString(SingleTypeInfo._URL),
+                    Method.valueOf(id.getString(SingleTypeInfo._METHOD))
+                );
+
+                int count = doc.getInt("count", 0);
+                countByAPIs.put(key, count);
+
+                boolean shouldIncludeApiInfo = this.showIssues &&
+                    ((categoryType != null && !categoryType.isEmpty()) || count >= 2);
+
+                if (shouldIncludeApiInfo) {
+                    @SuppressWarnings("unchecked")
+                    List<String> names = (List<String>) doc.getOrDefault("issueNames", new ArrayList<String>());
+                    List<String> normalized = names.stream()
+                        .map(n -> n == null ? "UNKNOWN" : n)
+                        .collect(Collectors.toList());
+                    issueNamesByKey.put(key, normalized);
+
+                    BasicDBObject idObj = new BasicDBObject("apiCollectionId", key.getApiCollectionId())
+                        .append("url", key.getUrl())
+                        .append("method", key.getMethod().name());
+                    idDocsForIssueNames.add(new BasicDBObject("_id", idObj));
+                }
+            }
+
+            result.put("countByAPIs", countByAPIs);
+
+            if (this.showIssues) {
+                if (issueNamesByKey.isEmpty()) {
+                    result.put("issueNamesByAPIs", new ArrayList<BasicDBObject>());
+                } else {
+                    List<ApiInfo> apiInfos = ApiInfoDao.getApiInfosFromList(idDocsForIssueNames, -1);
+                    Map<ApiInfoKey, ApiInfo> apiInfoByKey = new HashMap<>();
+                    for (ApiInfo a : apiInfos) apiInfoByKey.put(a.getId(), a);
+
+                    List<BasicDBObject> issueNamesByAPIs = new ArrayList<>();
+                    for (Map.Entry<ApiInfoKey, List<String>> e : issueNamesByKey.entrySet()) {
+                        ApiInfo ai = apiInfoByKey.get(e.getKey());
+                        if (ai == null) continue;
+                        issueNamesByAPIs.add(
+                            new BasicDBObject("apiInfo", ai).append("issueNames", e.getValue())
+                        );
+                    }
+                    result.put("issueNamesByAPIs", issueNamesByAPIs);
+                }
+            }
+
+            if (categories.size() == 1) {
+                this.response = result;
+                return SUCCESS.toUpperCase();
+            } else {
+                finalResponse.put(categoryType, result);
+            }
+        }
+
+        this.response = finalResponse;
+        return SUCCESS.toUpperCase();
+    }
+
 
     public String fetchIssuesTrend(){
         if(endTimeStamp == 0){
@@ -299,6 +450,34 @@ public class DashboardAction extends UserAction {
         return Action.SUCCESS.toUpperCase();
     }
 
+    public String getAPIInfosForMissingData(){
+        Bson filter = UsageMetricCalculator.excludeDemosAndDeactivated(Constants.ID);
+        // this map get the detailed count of missing api info keys in the api info dao with respect to the api collection id
+        Map<Integer, BasicDBObject> missingInfoMap = ApiInfoDao.instance.getApisListMissingInApiInfoDao(filter, this.startTimeStamp, this.endTimeStamp);    
+        response = new BasicDBObject();
+        int totalMissing = 0;
+        int apiTypeMissing = 0;
+        int authNotCalculated = 0;
+        int accessTypeNotCalculated = 0;
+        int redundantApis = 0;
+        for(BasicDBObject value: missingInfoMap.values()) {
+            totalMissing += ((Set<?>) value.get("missingApiInfoKeysInSti")).size();
+            apiTypeMissing += ((List<?>) value.get("missingApiInfoKeysInSamples")).size();
+            authNotCalculated += ((List<?>) value.get("missingApiInfoKeysForAuth")).size();
+            accessTypeNotCalculated += ((List<?>) value.get("missingApiInfoKeysForAccessType")).size();
+            redundantApis += ((List<?>) value.get("redundantApiInfoKeys")).size();
+        }
+
+        // currently we just need to return the total count of missing api info keys, hence this
+        response.put("totalMissing", totalMissing);
+        response.put("apiTypeMissing", apiTypeMissing);
+        response.put("authNotCalculated", authNotCalculated);
+        response.put("accessTypeNotCalculated", accessTypeNotCalculated);
+        response.put("redundantApiInfoKeys", redundantApis);
+
+        return Action.SUCCESS.toUpperCase();
+    }
+
     public int getStartTimeStamp() {
         return startTimeStamp;
     }
@@ -398,4 +577,15 @@ public class DashboardAction extends UserAction {
     public BasicDBObject getResponse() {
         return response;
     }
+
+    public boolean getShowIssues() {
+        return showIssues;
+    }
+
+    public void setShowIssues(boolean showIssues) {
+        this.showIssues = showIssues;
+    }
+
+    @Setter
+    private List<String> categoryTypes;
 }

@@ -9,6 +9,8 @@ import SampleData from '../../../components/shared/SampleData'
 import { DeleteMajor, CircleCancelMajor, CircleTickMajor } from "@shopify/polaris-icons"
 
 function AdvancedTrafficFilters() {
+    const [topLevelActive, setTopLevelActive] = useState(false);
+    const [deleteSlash, setDeleteSlash] = useState(false)
     function MainComp () {
         const [currentTemplate, setCurrentTemplate] = useState({message: ""})
         const [ogData, setOgData] = useState({ message: "" })
@@ -55,9 +57,20 @@ function AdvancedTrafficFilters() {
 
         const handleDryRun = async(content, shouldDelete) => {
             if(window.IS_SAAS !== "true" ||  window.USER_NAME.includes("akto")){
-                await trafficFiltersRequest.dryRunAdvancedFilters(content, shouldDelete).then((res)=> {
-                    window.open("/dashboard/settings/logs", "_blank")
-                })
+                if(topLevelActive) {
+                    await trafficFiltersRequest.cleanUpInventory(shouldDelete).then((res)=> {
+                        console.log("Clean up inventory response", res)
+                    })
+                }else if(deleteSlash) {
+                    await trafficFiltersRequest.deleteOptionAndSlashApis(shouldDelete).then((res)=> {
+                        console.log("Delete options and slash APIs response", res)
+                    })
+                }else{
+                    await trafficFiltersRequest.dryRunAdvancedFilters(content, shouldDelete).then((res)=> {
+                        window.open("/dashboard/settings/logs", "_blank")
+                    })
+                }
+                
             }
         }
 
@@ -181,9 +194,9 @@ function AdvancedTrafficFilters() {
                 </LegacyCard.Section>
             </LegacyCard>
             <Modal
-                open={modalActive}
-                onClose={() => setModalActive(false)}
-                primaryAction={{content: 'Save', onAction: () => {handleSave(currentTemplate); setModalActive(false)}}}
+                open={modalActive || topLevelActive || deleteSlash}
+                onClose={() => {setModalActive(false); setTopLevelActive(false); setDeleteSlash(false)}}
+                primaryAction={{content: 'Save', onAction: () => {handleSave(currentTemplate); setModalActive(false)} , disabled: topLevelActive || deleteSlash}}
                 secondaryActions={(window.IS_SAAS !== "true" ||  window.USER_NAME.includes("akto"))? [{content: 'Dry run', onAction: () => handleDryRun(currentTemplate, false)},{content: 'Delete APIs matched', onAction: ()=> handleDryRun(currentTemplate, true) }]: []}
                 title={"Add advanced filters"}
             >
@@ -211,7 +224,8 @@ function AdvancedTrafficFilters() {
             }
             isFirstPage={true}
             divider={true}
-            mor
+            primaryAction={window.USER_NAME && window.USER_NAME.endsWith("@akto.io") ? <Button onClick={() => setTopLevelActive(true)}>Clean up</Button> : null}
+            secondaryActions={window.USER_NAME && window.USER_NAME.endsWith("@akto.io") ? <Button onClick={() => setDeleteSlash(true)}>Delete Options & Slash APIs</Button> : null}
         />
     )
 }

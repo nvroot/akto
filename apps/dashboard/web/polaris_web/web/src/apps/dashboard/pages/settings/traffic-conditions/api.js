@@ -36,6 +36,13 @@ const trafficFiltersRequest = {
             data: {yamlContent, deleteAPIsInstantly}
         })
     },
+    cleanUpInventory(deleteAPIsInstantly){
+        return request({
+            url: '/api/cleanNonHostApiInfos',
+            method: 'post',
+            data: {deleteAPIsInstantly}
+        })
+    },
     getAdvancedFiltersPermissions(){
         return request({
             url: '/api/getAccountSettingsForAdvancedFilters',
@@ -48,6 +55,13 @@ const trafficFiltersRequest = {
             url: '/api/updateRetrospectiveFilterSettings',
             method: 'post',
             data: {updateFiltersFlag, permissionValue}
+        })
+    },
+    deleteOptionAndSlashApis(deleteAPIsInstantly){
+        return request({
+            url: '/api/deleteOptionAndSlashApis',
+            method: 'post',
+            data: {deleteAPIsInstantly}
         })
     }
 }

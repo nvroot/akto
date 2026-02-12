@@ -10,10 +10,14 @@ import com.akto.dto.CustomDataType;
 import com.akto.types.CappedSet;
 import com.akto.util.AccountTask;
 import com.mongodb.BasicDBObject;
+import com.mongodb.client.model.Filters;
+
 import io.swagger.v3.oas.models.media.*;
+
 import org.apache.commons.lang3.StringUtils;
 import org.bson.codecs.pojo.annotations.BsonIgnore;
 import org.bson.codecs.pojo.annotations.BsonProperty;
+import org.bson.conversions.Bson;
 import org.bson.types.ObjectId;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,6 +43,13 @@ public class SingleTypeInfo {
         } else {
             return new HashMap<>();
         }
+    }
+
+        public static boolean isCustomDataTypeAvailable(int accountId){
+        if(accountToDataTypesInfo.containsKey(accountId)){
+            return !accountToDataTypesInfo.get(accountId).getRedactedDataTypes().isEmpty();
+        }
+        return false;
     }
 
     public static List<CustomAuthType> getCustomAuthType (int accountId) {
@@ -139,17 +150,33 @@ public class SingleTypeInfo {
         info.setRedactedDataTypes(redactedDataTypes);
     }
 
+    public static Bson getFilterFromParamId(ParamId paramId) {
+        return Filters.and(
+            Filters.eq(SingleTypeInfo._URL, paramId.getUrl()),
+            Filters.eq(SingleTypeInfo._METHOD, paramId.getMethod()),
+            Filters.eq(SingleTypeInfo._RESPONSE_CODE, paramId.getResponseCode()),
+            Filters.eq(SingleTypeInfo._IS_HEADER, paramId.isHeader()),
+            Filters.eq(SingleTypeInfo._PARAM, paramId.getParam()),
+            Filters.eq(SingleTypeInfo.SUB_TYPE, paramId.getSubType().name),
+            Filters.eq(SingleTypeInfo._API_COLLECTION_ID, paramId.getApiCollectionId())
+        );
+    }
+
     public static void fetchCustomDataTypes(int accountId, List<CustomDataType> customDataTypes,
                                             List<AktoDataType> aktoDataTypes) {
         Map<String, CustomDataType> newMap = new HashMap<>();
         List<CustomDataType> sensitiveCustomDataType = new ArrayList<>();
         List<CustomDataType> nonSensitiveCustomDataType = new ArrayList<>();
+        Set<String> redactedDataTypes = new HashSet<>();
         for (CustomDataType customDataType: customDataTypes) {
             newMap.put(customDataType.getName(), customDataType);
             if (customDataType.isSensitiveAlways() || customDataType.getSensitivePosition().size()>0) {
                 sensitiveCustomDataType.add(customDataType);
             } else {
                 nonSensitiveCustomDataType.add(customDataType);
+            }
+            if (customDataType.isRedacted()) {
+                redactedDataTypes.add(customDataType.getName());
             }
         }
 
@@ -169,6 +196,7 @@ public class SingleTypeInfo {
             }
         }
         info.setAktoDataTypeMap(newAktoMap);
+        info.setRedactedDataTypes(redactedDataTypes);
     }
 
     public static boolean isRedacted(String dataTypeName){
@@ -188,7 +216,7 @@ public class SingleTypeInfo {
     }
 
     public enum SuperType {
-        BOOLEAN, INTEGER, FLOAT, STRING, OBJECT_ID, NULL, OTHER, CUSTOM
+        BOOLEAN, INTEGER, FLOAT, STRING, OBJECT_ID, NULL, OTHER, CUSTOM, VERSIONED
     }
 
     public enum Position {
@@ -219,6 +247,8 @@ public class SingleTypeInfo {
             Collections.emptyList());
     public static SubType CREDIT_CARD = new SubType("CREDIT_CARD", true, SuperType.STRING, StringSchema.class,
             Collections.emptyList());
+    public static SubType VIN = new SubType("VIN", true, SuperType.STRING, StringSchema.class,
+            Collections.emptyList());
     public static SubType PHONE_NUMBER = new SubType("PHONE_NUMBER", true, SuperType.STRING, StringSchema.class,
             Collections.emptyList());
     public static SubType UUID = new SubType("UUID", false, SuperType.STRING, StringSchema.class,
@@ -232,6 +262,14 @@ public class SingleTypeInfo {
     public static SubType IP_ADDRESS = new SubType("IP_ADDRESS", false, SuperType.STRING, StringSchema.class,
             Arrays.asList(Position.RESPONSE_PAYLOAD, Position.RESPONSE_HEADER));
     // make sure to add AKTO subTypes to subTypeMap below
+
+    public static boolean doesNotStartWithSuperType(String input) {
+        if (input == null) return true;
+
+        return Arrays.stream(SuperType.values())
+                .map(Enum::name)
+                .noneMatch(input::startsWith);
+    }
 
     public static class SubType {
         private String name;
@@ -530,14 +568,13 @@ public class SingleTypeInfo {
     long maxValue = ACCEPTED_MIN_VALUE;  // this value will be used when field doesn't exist in db
     public static final String LAST_SEEN = "lastSeen";
     long lastSeen;
+    public static final String SOURCES = "sources";
+    Map<String, Object> sources;
 
     @BsonIgnore
     private boolean isPrivate; // do not use this field anywhere else. This was added to convey if STI is private or not to frontend
     @BsonIgnore
     private Object value;
-
-    // Only being used for generating OpenAPI spec.
-    @BsonIgnore
     private boolean isQueryParam;
 
     public boolean isQueryParam() {
@@ -572,6 +609,7 @@ public class SingleTypeInfo {
         subTypeMap.put("ADDRESS", ADDRESS);
         subTypeMap.put("SSN", SSN);
         subTypeMap.put("CREDIT_CARD", CREDIT_CARD);
+        subTypeMap.put("VIN", VIN);
         subTypeMap.put("PHONE_NUMBER", PHONE_NUMBER);
         subTypeMap.put("UUID", UUID);
         subTypeMap.put("GENERIC", GENERIC);
@@ -777,6 +815,14 @@ public String composeKeyWithCustomSubType(SubType s) {
         this.strId = strId;
     }
 
+    public Map<String, Object> getSources() {
+        return this.sources;
+    }
+
+    public void setSources(Map<String, Object> sources) {
+        this.sources = sources;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (o == this)
@@ -969,5 +1015,13 @@ public String composeKeyWithCustomSubType(SubType s) {
 
     public void setId(ObjectId id) {
         this.id = id;
+    }
+
+    public boolean getIsQueryParam() {
+        return isQueryParam;
+    }
+
+    public void setIsQueryParam(boolean isQueryParam) {
+        this.isQueryParam = isQueryParam;
     }
 }

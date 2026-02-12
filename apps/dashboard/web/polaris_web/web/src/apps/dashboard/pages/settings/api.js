@@ -137,11 +137,28 @@ const settingRequests = {
             data: {}
         })
     },
+    fetchAllMetricsDesciptions() {
+        return request({
+            url: '/api/allMetricsDescription',
+            method: 'post',
+            data: {}
+        })
+    },
     fetchTrafficMetrics(groupBy, startTimestamp, endTimestamp, names, host) {
         return request({
             url: '/api/fetchTrafficMetrics',
             method: 'post',
             data: {groupBy, startTimestamp, endTimestamp, names, host}
+        })
+    },
+    fetchMetrics(startTimestamp, endTimestamp, metricIdPrefix, instanceId) {
+        const data = {startTime:startTimestamp, endTime:endTimestamp}
+        if (metricIdPrefix) data.metricIdPrefix = metricIdPrefix
+        if (instanceId) data.instanceId = instanceId
+        return request({
+            url: '/api/metrics',
+            method: 'post',
+            data
         })
     },
 
@@ -191,11 +208,11 @@ const settingRequests = {
             data: {id}
         })
     },
-    addSlackWebhook(webhookUrl) {
+    addSlackWebhook(webhookUrl, webhookName) {
         return request({
             url: '/api/addSlackWebhook',
             method: 'post',
-            data: {webhookUrl}
+            data: {webhookUrl, webhookName}
         })
     },
     deleteSlackWebhook(apiTokenId) {
@@ -258,6 +275,72 @@ const settingRequests = {
             url: '/api/addIntegration',
             method: 'post',
             data: {userEmail, apiToken, baseUrl, projId, projectAndIssueMap}
+        })
+    },
+
+    fetchJiraStatusMapping(projId, baseUrl, userEmail, apiToken){
+        return request({
+            url: '/api/jira/fetchProjectStatuses',
+            method: 'post',
+            data: {projId, baseUrl, userEmail, apiToken}
+        })
+    },
+
+    addJiraIntegrationV2(data) {
+        return request({
+            url: '/api/jira/add',
+            method: 'post',
+            data: {...data}
+        })
+    },
+
+
+    deleteJiraIntegratedProject(projId) {
+        return request({
+            url: '/api/jira/delete',
+            method: 'post',
+            data: {projId}
+        })
+    },
+
+    fetchJiraPriorities() {
+        return request({
+            url: '/api/jira/fetchPriorities',
+            method: 'post',
+            data: {}
+        })
+    },
+
+    // Project-level priority field mapping APIs
+    fetchAvailableFieldsForMapping(projectKey) {
+        return request({
+            url: '/api/jira/fetchAvailableFieldsForMapping',
+            method: 'post',
+            data: {projectKey}
+        })
+    },
+
+    fetchFieldValues(projectKey, fieldId) {
+        return request({
+            url: '/api/jira/fetchFieldValues',
+            method: 'post',
+            data: {projectKey, fieldId}
+        })
+    },
+
+    savePriorityFieldMapping(projectKey, priorityFieldMapping) {
+        return request({
+            url: '/api/jira/savePriorityFieldMapping',
+            method: 'post',
+            data: {projectKey, priorityFieldMapping}
+        })
+    },
+
+    fetchPriorityFieldMapping(projectKey) {
+        return request({
+            url: '/api/jira/fetchPriorityFieldMapping',
+            method: 'post',
+            data: {projectKey}
         })
     },
 
@@ -456,6 +539,24 @@ const settingRequests = {
             }
         })
     },
+    switchTestingModule(miniTestingEnabled){
+        return request({
+            url: '/api/switchTestingModule',
+            method: "post",
+            data: {
+                miniTestingEnabled
+            }
+        })
+    },
+    enableMergingOnVersions(enableMergingOnVersions, allowRetrospectiveMerging) {
+        return request({
+            url: '/api/enableMergingOnVersionsInApis',
+            method: "post",
+            data: {
+                enableMergingOnVersions, allowRetrospectiveMerging
+            }
+        })
+    },
     resetUserPassword(userEmail) {
         return request({
             url: '/api/resetUserPassword',
@@ -477,18 +578,18 @@ const settingRequests = {
             data: {}
         })
     },
-    createCustomRole(apiCollectionIds, roleName, baseRole, defaultInviteRole) {
+    createCustomRole(apiCollectionIds, roleName, baseRole, defaultInviteRole, allowedFeaturesForUser) {
         return request({
             url: '/api/createCustomRole',
             method: 'post',
-            data: { apiCollectionIds, roleName, baseRole, defaultInviteRole }
+            data: { apiCollectionIds, roleName, baseRole, defaultInviteRole, allowedFeaturesForUser }
         })
     },
-    updateCustomRole(apiCollectionIds, roleName, baseRole, defaultInviteRole) {
+    updateCustomRole(apiCollectionIds, roleName, baseRole, defaultInviteRole, allowedFeaturesForUser) {
         return request({
             url: '/api/updateCustomRole',
             method: 'post',
-            data: {apiCollectionIds, roleName, baseRole, defaultInviteRole}
+            data: {apiCollectionIds, roleName, baseRole, defaultInviteRole, allowedFeaturesForUser}
         })
     },
     deleteCustomRole(roleName) {
@@ -496,6 +597,297 @@ const settingRequests = {
             url: '/api/deleteCustomRole',
             method: 'post',
             data: {roleName}
+        })
+    },
+    addAwsWafIntegration(awsAccessKey, awsSecretKey, region, ruleSetId, ruleSetName,severityLevels) {
+        return request({
+            url: '/api/addAwsWafIntegration',
+            method: 'post',
+            data: {awsAccessKey, awsSecretKey, region, ruleSetId, ruleSetName,severityLevels}
+        })
+    },
+    fetchAwsWafIntegration() {
+        return request({
+            url: '/api/fetchAwsWafIntegration',
+            method: 'post',
+            data: {}
+        })
+    },
+    addSplunkIntegration(splunkUrl, splunkToken) {
+        return request({
+            url: '/api/addSplunkIntegration',
+            method: 'post',
+            data: {splunkUrl, splunkToken}
+        })
+    },
+    fetchSplunkIntegration() {
+        return request({
+            url: '/api/fetchSplunkIntegration',
+            method: 'post',
+            data: {}
+        })
+    },
+
+    fetchAzureBoardsIntegration() {
+        return request({
+            url: '/api/fetchAzureBoardsIntegration',
+            method: 'post',
+            data: {}
+        })
+    },
+
+    addAzureBoardsIntegration(azureBoardsBaseUrl, organization, projectList, personalAuthToken) {
+        return request({
+            url: '/api/addAzureBoardsIntegration',
+            method: 'post',
+            data: {azureBoardsBaseUrl, organization, projectList, personalAuthToken}
+        })
+    },
+    removeAzureBoardsIntegration() {
+        return request({
+            url: '/api/removeAzureBoardsIntegration',
+            method: 'post',
+            data: {}
+        })
+    },
+
+    fetchAdxIntegration() {
+        return request({
+            url: '/api/fetchAdxIntegration',
+            method: 'post',
+            data: {}
+        })
+    },
+
+    addAdxIntegration(clusterEndpoint, databaseName, tenantId, applicationClientId, applicationKey) {
+        return request({
+            url: '/api/addAdxIntegration',
+            method: 'post',
+            data: {clusterEndpoint, databaseName, tenantId, applicationClientId, applicationKey}
+        })
+    },
+    removeAdxIntegration() {
+        return request({
+            url: '/api/removeAdxIntegration',
+            method: 'post',
+            data: {}
+        })
+    },
+
+    fetchServiceNowIntegration() {
+        return request({
+            url: '/api/fetchServiceNowIntegration',
+            method: 'post',
+            data: {}
+        })
+    },
+
+    fetchServiceNowTables(instanceUrl, clientId, clientSecret) {
+        return request({
+            url: '/api/fetchServiceNowTables',
+            method: 'post',
+            data: {instanceUrl, clientId, clientSecret}
+        })
+    },
+
+    addServiceNowIntegration(instanceUrl, clientId, clientSecret, tableNames) {
+        return request({
+            url: '/api/addServiceNowIntegration',
+            method: 'post',
+            data: {instanceUrl, clientId, clientSecret, tableNames}
+        })
+    },
+
+    removeServiceNowIntegration() {
+        return request({
+            url: '/api/removeServiceNowIntegration',
+            method: 'post',
+            data: {}
+        })
+    },
+
+    fetchDevRevIntegration() {
+        return request({
+            url: '/api/fetchDevRevIntegration',
+            method: 'post',
+            data: {}
+        })
+    },
+
+    fetchDevRevParts(personalAccessToken, partTypes, partName) {
+        return request({
+            url: '/api/fetchDevRevParts',
+            method: 'post',
+            data: {
+                personalAccessToken,
+                partTypes: (partTypes && partTypes.length > 0) ? partTypes : null,
+                partName: partName || null
+            }
+        })
+    },
+
+    addDevRevIntegration(orgUrl, personalAccessToken, partsIdToNameMap) {
+        return request({
+            url: '/api/addDevRevIntegration',
+            method: 'post',
+            data: { orgUrl, personalAccessToken, partsIdToNameMap }
+        })
+    },
+
+    removeDevRevIntegration() {
+        return request({
+            url: '/api/removeDevRevIntegration',
+            method: 'post',
+            data: {}
+        })
+    },
+    removeInvitation(email) {
+        return request({
+            url: '/api/removeInvitation',
+            method: 'post',
+            data: {email}
+        })
+    },
+    async fetchModuleInfo(filter = {}) {
+        return await request({
+            url: '/api/fetchModuleInfo',
+            method: 'post',
+            data: { filter }
+        })
+    },
+    async deleteModuleInfo(moduleIds) {
+        return await request({
+            url: '/api/deleteModuleInfo',
+            method: 'post',
+            data: { moduleIds }
+        })
+    },
+    async fetchCloudflareWafIntegration() {
+        return await request({
+            url: '/api/fetchCloudflareWafIntegration',
+            method: 'post',
+            data: {}
+        })
+    },
+    async deleteCloudflareWafIntegration() {
+        return await request({
+            url: '/api/deleteCloudflareWafIntegration',
+            method: 'post',
+            data: {}
+        })
+    },
+    async addCloudflareWafIntegration(accountOrZoneId, apiKey, email, integrationType,severityLevels) {
+        return await request({
+            url: '/api/addCloudflareWafIntegration',
+            method: 'post',
+            data: {accountOrZoneId, apiKey, email, integrationType,severityLevels}
+        })
+    },
+    async getDeMergedApis() {
+        return await request({
+            url: '/api/getDeMergedApis',
+            method: 'post',
+            data: {}
+        })
+    },
+    async undoDemergedApis(mergedApis) {
+        return await request({
+            url: '/api/undoDemergedApis',
+            method: 'post',
+            data: {mergedUrls: mergedApis}
+        })
+    },
+    async downloadSamplePdf() {
+        return await request({
+            url: '/api/downloadSamplePdf',
+            method: 'post',
+            data: {}
+        })
+    },
+    async deleteAllMaliciousEvents() {
+        return await request({
+            url: '/api/deleteAllMaliciousEvents',
+            method: 'post',
+            data: {}
+        })
+    },
+    getAllowedFeaturesForRBAC() {
+        return request({
+            url: '/api/allowedFeaturesForRBAC',
+            method: 'post',
+            data: {}
+        })
+    },
+    async deleteDuplicateEntries() {
+        return await request({
+            url: '/api/deleteDuplicateEntries',
+            method: 'post',
+            data: {}
+        })
+    },
+    updateCompulsoryDescription(compulsoryDescription) {
+        return request({
+            url: '/api/updateCompulsoryDescription',
+            method: 'post',
+            data: {
+                compulsoryDescription
+            }
+        })
+    },
+    getMcpServersByAgent(agentId, deviceId) {
+        return request({
+            url: '/api/getMcpServersByAgent',
+            method: 'post',
+            data: {
+                agentId,
+                deviceId
+            }
+        })
+    },
+    getAgentLogs(agentId, startTime, endTime) {
+        return request({
+            url: '/api/getAgentLogs',
+            method: 'post',
+            data: {
+                agentId,
+                startTime,
+                endTime
+            }
+        })
+    },
+    addMcpRegistryIntegration(registries) {
+        return request({
+            url: '/api/addMcpRegistryIntegration',
+            method: 'post',
+            data: {registries}
+        })
+    },
+    updateBlockLogs(blockLogs) {
+        return request({
+            url: '/api/updateBlockLogs',
+            method: 'post',
+            data: {blockLogs}
+        })
+    },
+    updateFilterLogPolicy(filterLogPolicy) {
+        return request({
+            url: '/api/updateFilterLogPolicy',
+            method: 'post',
+            data: {filterLogPolicy}
+        })
+    },
+    rebootModules(moduleIds, deleteTopicAndReboot = false) {
+        return request({
+            url: '/api/rebootModules',
+            method: 'post',
+            data: {moduleIds, deleteTopicAndReboot}
+        })
+    },
+    updateModuleEnvAndReboot(moduleId, moduleName, envData) {
+        return request({
+            url: '/api/updateModuleEnvAndReboot',
+            method: 'post',
+            data: {moduleId, moduleName, envData}
         })
     }
 }

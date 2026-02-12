@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import {CircleTickMajor,ArchiveMinor,LinkMinor} from '@shopify/polaris-icons';
+import { CircleTickMajor, ArchiveMinor, LinkMinor } from '@shopify/polaris-icons';
 import TestingStore from '../testingStore';
 import api from '../api';
 import transform from '../transform';
@@ -11,51 +11,53 @@ import TestRunResultFull from './TestRunResultFull';
 import TestRunResultFlyout from './TestRunResultFlyout';
 import LocalStore from '../../../../main/LocalStorageStore';
 import observeFunc from "../../observe/transform"
+import issuesFunctions from '@/apps/dashboard/pages/issues/module';
+import issuesApi from "../../issues/api";
 
 let headerDetails = [
   {
     text: "",
     value: "icon",
-    itemOrder:0,
+    itemOrder: 0,
   },
   {
     text: "Name",
     value: "name",
-    itemOrder:1,
-    dataProps: {variant:"headingLg"}
+    itemOrder: 1,
+    dataProps: { variant: "headingLg" }
   },
   {
     text: "Severity",
     value: "severity",
-    itemOrder:2,
-    dataProps: {fontWeight:"regular"}
+    itemOrder: 2,
+    dataProps: { fontWeight: "regular" }
   },
   {
     text: "Detected time",
     value: "detected_time",
-    itemOrder:3,
-    dataProps:{fontWeight:'regular'},
+    itemOrder: 3,
+    dataProps: { fontWeight: 'regular' },
     icon: CircleTickMajor,
   },
   {
     text: 'Test category',
     value: 'testCategory',
-    itemOrder:3,
-    dataProps:{fontWeight:'regular'},
+    itemOrder: 3,
+    dataProps: { fontWeight: 'regular' },
     icon: ArchiveMinor
   },
   {
     text: 'url',
     value: 'url',
-    itemOrder:3,
-    dataProps:{fontWeight:'regular'},
+    itemOrder: 3,
+    dataProps: { fontWeight: 'regular' },
     icon: LinkMinor
   },
 ]
 
 function TestRunResultPage(props) {
 
-  let {testingRunResult, runIssues, testSubCategoryMap} = props;
+  let { testingRunResult, runIssues, testSubCategoryMap } = props;
 
   const location = useLocation()
   const selectedTestRunResult = TestingStore(state => state.selectedTestRunResult);
@@ -63,6 +65,9 @@ function TestRunResultPage(props) {
   const subCategoryFromSourceConfigMap = PersistStore(state => state.subCategoryFromSourceConfigMap);
   const [issueDetails, setIssueDetails] = useState({});
   const [jiraIssueUrl, setJiraIssueUrl] = useState({});
+  const [azureBoardsWorkItemUrl, setAzureBoardsWorkItemUrl] = useState({});
+  const [serviceNowTicketUrl, setServiceNowTicketUrl] = useState({});
+  const [devrevWorkUrl, setDevRevWorkUrl] = useState({});
   const subCategoryMap = LocalStore(state => state.subCategoryMap);
   const params = useParams();
   const hexId = params.hexId;
@@ -74,31 +79,36 @@ function TestRunResultPage(props) {
   const [remediation, setRemediation] = useState("")
   const hostNameMap = PersistStore(state => state.hostNameMap)
 
+  const [conversations, setConversations] = useState([])
+  const [conversationRemediationText, setConversationRemediationText] = useState(null)
+  const [validationFailed, setValidationFailed] = useState(false)
+  const [showForbidden, setShowForbidden] = useState(false)
+
   const useFlyout = location.pathname.includes("test-editor") ? false : true
 
   const setToastConfig = Store(state => state.setToastConfig)
   const setToast = (isActive, isError, message) => {
-      setToastConfig({
-        isActive: isActive,
-        isError: isError,
-        message: message
-      })
+    setToastConfig({
+      isActive: isActive,
+      isError: isError,
+      message: message
+    })
   }
-  
-  function getDescriptionText(fullDescription){
+
+  function getDescriptionText(fullDescription) {
 
     let tmp = testSubCategoryMap ? testSubCategoryMap : subCategoryMap
 
     let str = parse(tmp[issueDetails.id?.testSubCategory]?.issueDetails || "No details found");
     let finalStr = ""
 
-    if(typeof(str) !== 'string'){
-      str?.forEach((element) =>{
-        if(typeof(element) === 'object'){
-          if(element?.props?.children !== null){
+    if (typeof (str) !== 'string') {
+      str?.forEach((element) => {
+        if (typeof (element) === 'object') {
+          if (element?.props?.children !== null) {
             finalStr = finalStr + element.props.children
           }
-        }else{
+        } else {
           finalStr = finalStr + element
         }
       })
@@ -109,12 +119,13 @@ function TestRunResultPage(props) {
     str = str.replace(/"/g, '');
     let firstLine = str.split('.')[0]
     return fullDescription ? str : firstLine + ". "
-    
+
   }
 
-  async function createJiraTicketApiCall(hostStr, endPointStr, issueUrl, issueDescription, issueTitle, testingIssueId,projId, issueType) {
+  async function createJiraTicketApiCall(hostStr, endPointStr, issueUrl, issueDescription, issueTitle, testingIssueId, projId, issueType, additionalIssueFields, labels) {
+
     const jiraMetaData = {
-      issueTitle,hostStr,endPointStr,issueUrl,issueDescription,testingIssueId
+      issueTitle, hostStr, endPointStr, issueUrl, issueDescription, testingIssueId, additionalIssueFields, labels
     }
     let jiraInteg = await api.createJiraTicket(jiraMetaData, projId, issueType);
     return jiraInteg.jiraTicketKey
@@ -125,30 +136,61 @@ function TestRunResultPage(props) {
   }
 
   async function fetchData() {
-    if (hexId2 != undefined) {
-      if (testingRunResult == undefined) {
-        let res = await api.fetchTestRunResultDetails(hexId2)
-        testingRunResult = res.testingRunResult;
+    if (hexId2 !== undefined) {
+      try {
+        if (testingRunResult === undefined) {
+          let res = await api.fetchTestRunResultDetails(hexId2)
+          testingRunResult = res.testingRunResult;
+        }
+      } catch (error) {
+        if (error?.response?.status === 403 || error?.status === 403) {
+          setShowForbidden(true);
+          setLoading(false);
+          return;
+        }
+        throw error;
       }
-      if (runIssues == undefined) {
-        let res = await api.fetchIssueFromTestRunResultDetails(hexId2)
-        runIssues = res.runIssues;
+      try {
+        if (runIssues === undefined) {
+          let res = await api.fetchIssueFromTestRunResultDetails(hexId2)
+          runIssues = res.runIssues;
+        }
+      } catch (error) {
+        if (error?.response?.status === 403 || error?.status === 403) {
+          setShowForbidden(true);
+          setLoading(false);
+          return;
+        }
+        throw error;
+      }
+      if (testingRunResult?.testResults?.length > 0) {
+        let conversationId = testingRunResult.testResults[0].conversationId;
+        if (conversationId) {
+          let res = await api.fetchConversationsFromConversationId(conversationId);
+          if (res && res.length > 0) {
+            const result = transform.prepareConversationsList(res)
+            setConversations(result.conversations);
+            // Store remediation text from conversations if available
+            setConversationRemediationText(result.remediationText || null)
+            setValidationFailed(result.validationFailed)
+          }
+        }
       }
       setShowDetails(true)
     }
     setData(testingRunResult, runIssues);
-  setTimeout(() => {
-    setLoading(false);
-  }, 500)
-}
-  async function createJiraTicket(issueId, projId, issueType){
+    setTimeout(() => {
+      setLoading(false);
+    }, 500)
+  }
+  async function createJiraTicket(issueId, projId, issueType, labels) {
 
     if (Object.keys(issueId).length === 0) {
       return
     }
     const url = issueId.apiInfoKey.url
     const hostName = hostNameMap[issueId.apiInfoKey.id] ? hostNameMap[issueId.apiInfoKey.id] : observeFunc.getHostName(url)
-    
+
     let pathname = "Endpoint - ";
     try {
       if (url.startsWith("http")) {
@@ -159,23 +201,33 @@ function TestRunResultPage(props) {
     } catch (err) {
       pathname += url;
     }
-    
+
     // break into host and path
     let description = "Description - " + getDescriptionText(true)
-    
+
     let tmp = testSubCategoryMap ? testSubCategoryMap : subCategoryMap
     let issueTitle = tmp[issueId?.testSubCategory]?.testName
 
-    setToast(true,false,"Creating Jira Ticket")
+    setToast(true, false, "Creating Jira Ticket")
 
     let jiraTicketKey = ""
-    await createJiraTicketApiCall("Host - "+hostName, pathname, window.location.href, description, issueTitle, issueId, projId, issueType).then(async(res)=> {
-      if(res?.errorMessage) {
+
+    const additionalIssueFields = {};
+    try {
+      const customIssueFields = issuesFunctions.prepareCustomIssueFields(projId, issueType);
+      additionalIssueFields["customIssueFields"] = customIssueFields;
+    } catch (error) {
+      setToast(true, true, "Please fill all required fields before creating a Jira ticket.");
+      return;
+    }
+
+    await createJiraTicketApiCall("Host - " + hostName, pathname, window.location.href, description, issueTitle, issueId, projId, issueType, additionalIssueFields, labels).then(async (res) => {
+      if (res?.errorMessage) {
         setToast(true, true, res?.errorMessage)
       }
       jiraTicketKey = res
       await fetchData();
-      setToast(true,false,"Jira Ticket Created, scroll down to view")
+      setToast(true, false, "Jira Ticket Created, scroll down to view")
     })
 
     if (selectedTestRunResult == null || selectedTestRunResult.testResults == null || selectedTestRunResult.testResults.length === 0) {
@@ -187,8 +239,23 @@ function TestRunResultPage(props) {
 
   }
 
+  async function createDevRevTicket(issueId, partId, workItemType) {
+    setToast(true, false, "Creating DevRev Ticket")
+
+    await issuesApi.createDevRevTickets([issueId], partId, workItemType, window.location.origin).then(async (res) => {
+      await fetchData();
+      if (res?.errorMessage) {
+        setToast(true, false, res.errorMessage)
+      } else {
+        setToast(true, false, "DevRev Ticket Created, scroll down to view")
+      }
+    }).catch((err) => {
+      setToast(true, true, err?.response?.data?.errorMessage || err?.response?.data?.actionErrors?.[0] || "Error creating DevRev ticket")
+    })
+  }
+
   async function setData(testingRunResult, runIssues) {
-    
+
     let tmp = testSubCategoryMap ? testSubCategoryMap : subCategoryMap
 
     if (testingRunResult) {
@@ -207,9 +274,15 @@ function TestRunResultPage(props) {
         runIssuesArr = resp1['similarlyAffectedIssues'];
       })
       let jiraIssueCopy = runIssues.jiraIssueUrl || "";
+      let azureBoardsWorkItemUrlCopy = runIssues.azureBoardsWorkItemUrl || "";
+      let serviceNowTicketUrlCopy = runIssues.servicenowIssueUrl || "";
+      let devrevWorkUrlCopy = runIssues.devrevWorkUrl || "";
       const moreInfoSections = transform.getInfoSectionsHeaders()
       setJiraIssueUrl(jiraIssueCopy)
-      setInfoState(transform.fillMoreInformation(subCategoryMap[runIssues?.id?.testSubCategory],moreInfoSections, runIssuesArr, jiraIssueCopy, onClickButton))
+      setAzureBoardsWorkItemUrl(azureBoardsWorkItemUrlCopy)
+      setServiceNowTicketUrl(serviceNowTicketUrlCopy)
+      setDevRevWorkUrl(devrevWorkUrlCopy)
+      setInfoState(transform.fillMoreInformation(subCategoryMap[runIssues?.id?.testSubCategory], moreInfoSections, runIssuesArr, jiraIssueCopy, onClickButton))
       setRemediation(subCategoryMap[runIssues?.id?.testSubCategory]?.remediation)
       // setJiraIssueUrl(jiraIssueUrl)
       // setInfoState(transform.fillMoreInformation(subCategoryMap[runIssues?.id?.testSubCategory],moreInfoSections, runIssuesArr))
@@ -224,40 +297,48 @@ function TestRunResultPage(props) {
 
   return (
     useFlyout ?
-    <>
-    <TestRunResultFlyout
-      selectedTestRunResult={selectedTestRunResult}
-      remediationSrc={remediation}
-      testingRunResult={testingRunResult} 
-      loading={loading} 
-      issueDetails={issueDetails} 
-      getDescriptionText={getDescriptionText} 
-      infoState={infoState} 
-      createJiraTicket={createJiraTicket} 
-      jiraIssueUrl={jiraIssueUrl} 
-      hexId={hexId} 
-      source={props?.source}
-      setShowDetails={setShowDetails}
-      showDetails={showDetails}
-      isIssuePage={location.pathname.includes("issues")}
-    />
-    </>
-    :
-    <TestRunResultFull
-      selectedTestRunResult={selectedTestRunResult} 
-      testingRunResult={testingRunResult} 
-      loading={loading} 
-      issueDetails={issueDetails} 
-      getDescriptionText={getDescriptionText} 
-      infoState={infoState} 
-      headerDetails={headerDetails}
-      createJiraTicket={createJiraTicket} 
-      jiraIssueUrl={jiraIssueUrl} 
-      hexId={hexId} 
-      source={props?.source}
-      setShowDetails={setShowDetails}
-      showDetails={showDetails}
-    />
+      <>
+        <TestRunResultFlyout
+          selectedTestRunResult={selectedTestRunResult}
+          remediationSrc={remediation}
+          testingRunResult={testingRunResult}
+          loading={loading}
+          issueDetails={issueDetails}
+          getDescriptionText={getDescriptionText}
+          infoState={infoState}
+          createJiraTicket={createJiraTicket}
+          createDevRevTicket={createDevRevTicket}
+          jiraIssueUrl={jiraIssueUrl}
+          hexId={hexId}
+          source={props?.source}
+          setShowDetails={setShowDetails}
+          showDetails={showDetails}
+          isIssuePage={location.pathname.includes("issues")}
+          azureBoardsWorkItemUrl={azureBoardsWorkItemUrl}
+          serviceNowTicketUrl={serviceNowTicketUrl}
+          devrevWorkUrl={devrevWorkUrl}
+          conversations={conversations}
+          conversationRemediationText={conversationRemediationText}
+          validationFailed={validationFailed}
+          showForbidden={showForbidden}
+        />
+      </>
+      :
+      <TestRunResultFull
+        selectedTestRunResult={selectedTestRunResult}
+        testingRunResult={testingRunResult}
+        loading={loading}
+        issueDetails={issueDetails}
+        getDescriptionText={getDescriptionText}
+        infoState={infoState}
+        headerDetails={headerDetails}
+        createJiraTicket={createJiraTicket}
+        jiraIssueUrl={jiraIssueUrl}
+        hexId={hexId}
+        source={props?.source}
+        setShowDetails={setShowDetails}
+        showDetails={showDetails}
+      />
   )
 }
 

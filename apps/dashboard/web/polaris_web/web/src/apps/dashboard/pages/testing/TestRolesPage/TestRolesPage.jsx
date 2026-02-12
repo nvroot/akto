@@ -11,11 +11,14 @@ import { CellType } from "../../../components/tables/rows/GithubRow"
 import TitleWithInfo from "../../../components/shared/TitleWithInfo"
 import useTable from "../../../components/tables/TableContext"
 import TooltipText from "../../../components/shared/TooltipText"
+import { mapLabel, getDashboardCategory } from "../../../../main/labelHelper"
 
 
 const sortOptions = [
     { label: 'Created at', value: 'created asc', directionLabel: 'Highest', sortKey: 'createdTs', columnIndex: 2 },
     { label: 'Created at', value: 'created desc', directionLabel: 'Lowest', sortKey: 'createdTs', columnIndex: 2 },
+    { label: 'Updated at', value: 'updated asc', directionLabel: 'Highest', sortKey: 'lastUpdatedTs', columnIndex: 3 },
+    { label: 'Updated at', value: 'updated desc', directionLabel: 'Lowest', sortKey: 'lastUpdatedTs', columnIndex: 3 },
 ];
 
 const headers = [
@@ -30,6 +33,20 @@ const headers = [
         value:"createdAt",
         sortKey:"createdTs",
         sortActive:true,
+    },
+    {
+        title:"Last Updated at",
+        text:"Updated at",
+        value:"lastUpdatedAt",
+        sortKey:"lastUpdatedTs",
+        sortActive:true,
+    },
+    {
+        title:"Last Updated By",
+        text:"Updated By",
+        value:"updatedBy",
+        showFilter:true,
+        filterKey:"updatedBy"
     },
     {
         title:"Author",
@@ -64,18 +81,7 @@ function TestRolesPage(){
 
     const getActions = (item) => {
 
-        const actionItems = [{
-            items: [
-                {
-                    content: 'Access matrix',
-                    onAction: () => navigate("access-matrix", {state: {
-                        name: item.name,
-                        endpoints: item.endpointLogicalGroup.testingEndpoints,
-                        authWithCondList: item.authWithCondList
-                    }})
-                }
-            ]
-        }]
+        const actionItems = [{ items: [] }]
 
         // if(item.name !== 'ATTACKER_TOKEN_ALL') {
         if(item.createdBy !== 'System') {
@@ -92,6 +98,10 @@ function TestRolesPage(){
             actionItems[0].items.push(removeActionItem)
         }
 
+        if (actionItems.length === 0 || (actionItems[0] && actionItems[0].items.length === 0)) {
+            return []
+        }
+
         return actionItems
     }
 
@@ -104,6 +114,10 @@ function TestRolesPage(){
                 testRole.id=testRole.name;
                 testRole.createdAt = func.prettifyEpoch(testRole.createdTs)
                 testRole.nameComp = (<Box maxWidth="40vw"><TooltipText tooltip={testRole.name} text={testRole.name} textProps={{fontWeight: 'medium'}}/></Box>)
+                testRole.lastUpdatedAt = func.prettifyEpoch(testRole?.lastUpdatedTs)
+                if(testRole?.lastUpdatedBy) {
+                    testRole.updatedBy = testRole?.lastUpdatedBy
+                }
                 all.push(testRole)
                 if(testRole.createdBy === 'System') {
                     system.push(testRole)
@@ -122,6 +136,16 @@ function TestRolesPage(){
     const tableCountObj = func.getTabsCount(definedTableTabs, data)
     const tableTabs = func.getTableTabsContent(definedTableTabs, tableCountObj, setSelectedTab, selectedTab, tabsInfo)
 
+    const anyRowHasActions = (() => {
+        const rows = data[selectedTab] || []
+        for (let i = 0; i < rows.length; i++) {
+            const actions = getActions(rows[i])
+            if (actions && actions.length > 0) {
+                return true
+            }
+        }
+        return false
+    })()
 
     useEffect(() => {
         setLoading(true);
@@ -130,6 +154,7 @@ function TestRolesPage(){
 
     const onTestRoleClick = (item) => navigate("details", {state: {
         name: item.name,
+        scopeRoles: item?.scopeRoles || [],
         endpoints: item?.endpointLogicalGroup?.testingEndpoints || [],
         authWithCondList: item?.authWithCondList || []
     }})
@@ -141,8 +166,8 @@ function TestRolesPage(){
     return (
         <PageWithMultipleCards
             title={<TitleWithInfo
-                titleText={"Test roles"}
-                tooltipContent={"Test roles define specific access permissions and authentication methods for API security testing scenarios."}
+                titleText={mapLabel("Test", getDashboardCategory()) + " roles"}
+                tooltipContent={`Test roles define specific access permissions and authentication methods for API ${mapLabel('security testing', getDashboardCategory())} scenarios.`}
             />}
         primaryAction = {<Button primary onClick={handleRedirect}><div data-testid="new_test_role_button">Create new test role</div></Button>}
         isFirstPage={true}
@@ -173,7 +198,7 @@ function TestRolesPage(){
                     loading={loading}
                     onRowClick={onTestRoleClick}
                     getActions={getActions}
-                    hasRowActions={true}
+                    hasRowActions={anyRowHasActions}
                     useNewRow={true}
                     sortOptions={sortOptions}
                 />

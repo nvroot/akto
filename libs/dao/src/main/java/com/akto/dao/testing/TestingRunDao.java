@@ -9,6 +9,7 @@ import org.bson.types.ObjectId;
 import com.akto.dao.AccountsContextDao;
 import com.akto.dao.MCollection;
 import com.akto.dao.context.Context;
+import com.akto.dto.rbac.UsersCollectionsList;
 import com.akto.dto.testing.TestingRun;
 import com.mongodb.client.model.CreateCollectionOptions;
 import com.akto.dto.testing.TestingRunResultSummary;
@@ -90,9 +91,46 @@ public class TestingRunDao extends AccountsContextDao<TestingRun> {
         ) > 0;
     }
 
+    private Bson addCollectionsFilterForIAM(Bson q) {
+        List<Integer> apiCollectionIds = UsersCollectionsList.getCollectionsIdForUser(Context.userId.get(),
+                Context.accountId.get());
+        Bson collectionFilter = Filters.or(
+                Filters.in(TestingRun._API_COLLECTION_ID, apiCollectionIds),
+                Filters.in(TestingRun._API_COLLECTION_ID_WORK_FLOW, apiCollectionIds),
+                Filters.in(TestingRun._API_COLLECTION_ID_IN_LIST, apiCollectionIds)
+        );
+        return Filters.and(q, collectionFilter);
+    }
+
+    @Override
+    public List<TestingRun> findAll(Bson q, int skip, int limit, Bson sort, Bson projection) {
+        Bson finalFilter = Filters.and(q, addCollectionsFilterForIAM(q));
+        return super.findAll(finalFilter, skip, limit, sort, projection);
+    }
+
+    @Override
+    public long count(Bson q) {
+        Bson finalFilter = Filters.and(q, addCollectionsFilterForIAM(q));
+        return super.count(finalFilter);
+    }
+
     @Override
     public String getCollName() {
         return "testing_run";
+    }
+
+    /**
+     * Creates a filter for finding scheduled testing runs that should have started.
+     * This matches the filter used in Main.findPendingTestingRun for scheduled tests.
+     * 
+     * @param maxScheduleTimestamp Maximum schedule timestamp (typically current time or current time - buffer)
+     * @return Bson filter for scheduled testing runs
+     */
+    public Bson createScheduledTestingRunFilter(int maxScheduleTimestamp) {
+        return Filters.and(
+            Filters.eq(TestingRun.STATE, TestingRun.State.SCHEDULED),
+            Filters.lte(TestingRun.SCHEDULE_TIMESTAMP, maxScheduleTimestamp)
+        );
     }
 
     @Override

@@ -16,7 +16,15 @@ const threatDetectionRequests = {
         })
     },
 
-    fetchSuspectSampleData(skip, ips, apiCollectionIds, urls, types, sort, startTimestamp, endTimestamp, subCategory) {
+    deleteFilterYamlTemplate(templateId) {
+        return request({
+            url: '/api/deleteFilterYamlTemplate',
+            method: 'post',
+            data: { templateId }
+        })
+    },
+
+    fetchSuspectSampleData(skip, ips, apiCollectionIds, urls, types, sort, startTimestamp, endTimestamp, latestAttack, limit, statusFilter, successfulExploit, label, hosts, latestApiOrigRegex, method = [], sortBySeverity = false) {
         return request({
             url: '/api/fetchSuspectSampleData',
             method: 'post',
@@ -27,9 +35,17 @@ const threatDetectionRequests = {
                 types: types,
                 apiCollectionIds: apiCollectionIds,
                 sort: sort,
-                startTimestamp: startTimestamp,
-                endTimestamp: endTimestamp,
-                subCategory: subCategory
+                ...(startTimestamp !== undefined && startTimestamp !== null ? { startTimestamp } : {}),
+                ...(endTimestamp !== undefined && endTimestamp !== null ? { endTimestamp } : {}),
+                latestAttack: latestAttack || [],
+                limit: limit || 50,
+                statusFilter: statusFilter,
+                ...(typeof successfulExploit === 'boolean' ? { successfulExploit } : {}),
+                ...(label ? { label } : {}),
+                ...(hosts && hosts.length > 0 ? { hosts } : {}),
+                ...(latestApiOrigRegex ? { latestApiOrigRegex } : {}),
+                method: method,
+                ...(typeof sortBySeverity === 'boolean' ? { sortBySeverity } : {})
             }
         })
     },
@@ -40,7 +56,7 @@ const threatDetectionRequests = {
             data: {}
         })
     },
-    fetchThreatActors(skip, sort, latestAttack, country, startTs, endTs) {
+    fetchThreatActors(skip, sort, latestAttack, country, startTs, endTs, actorId, host) {
         return request({
             url: '/api/fetchThreatActors',
             method: 'post',
@@ -50,25 +66,48 @@ const threatDetectionRequests = {
                 latestAttack: latestAttack,
                 country: country,
                 startTs: startTs,
-                endTs: endTs
+                endTs: endTs,
+                actorId: actorId,
+                host: host
             }
         })
     },
-    fetchThreatApis(skip, sort) {
+    fetchThreatApis(skip, sort, latestAttack) {
         return request({
             url: '/api/fetchThreatApis',
             method: 'post',
             data: {
                 skip: skip,
-                sort: sort
+                sort: sort,
+                latestAttack: latestAttack || []
             }
         })
     },
-    getActorsCountPerCounty() {
+    getActorsCountPerCounty(startTs, endTs) {
         return request({
             url: '/api/getActorsCountPerCounty',
+            method: 'post',
+            data: {startTs, endTs}
+        })
+    },
+    fetchThreatConfiguration() {
+        return request({
+            url: '/api/fetchThreatConfiguration',
             method: 'get',
-            data: {}
+        })
+    },
+    modifyThreatConfiguration(data) {
+        return request({
+            url: '/api/modifyThreatConfiguration',
+            method: 'post',
+            data: { threatConfiguration: data}
+        })
+    },
+    toggleArchivalEnabled(enabled) {
+        return request({
+            url: '/api/toggleArchivalEnabled',
+            method: 'post',
+            data: { enabled: enabled }
         })
     },
     fetchThreatCategoryCount(startTs, endTs) {
@@ -78,11 +117,11 @@ const threatDetectionRequests = {
             data: {startTs, endTs}
         })
     },
-    fetchMaliciousRequest(refId){
+    fetchMaliciousRequest(refId, eventType, actor, filterId) {
         return request({
             url: '/api/fetchAggregateMaliciousRequests',
             method: 'post',
-            data: {refId}
+            data: {refId, eventType, actor, filterId}
         })
     },
     fetchCountBySeverity(startTs, endTs) {
@@ -99,11 +138,11 @@ const threatDetectionRequests = {
             data: {startTs, endTs}
         })
     },
-    getDailyThreatActorsCount(startTs, endTs) {
+    getDailyThreatActorsCount(startTs, endTs, latestAttack) {
         return request({
             url: '/api/getDailyThreatActorsCount',
             method: 'post',
-            data: {startTs, endTs}
+            data: {startTs, endTs, latestAttack: latestAttack || []}
         })
     },
     fetchSensitiveParamsForEndpoints (urls) {
@@ -127,6 +166,140 @@ const threatDetectionRequests = {
             url: '/api/fetchFiltersForThreatActors',
             method: 'post',
             data: {}
+        })
+    },
+    modifyThreatActorStatus(actorIp, status) {
+        return request({
+            url: '/api/modifyThreatActorStatus',
+            method: 'post',
+            data: {actorIp, status}
+        })
+    },
+    modifyThreatActorStatusCloudflare(actorIp, status) {
+        return request({
+            url: '/api/modifyThreatActorStatusCloudflare',
+            method: 'post',
+            data: {actorIp, status}
+        })
+    },
+    updateMaliciousEventStatus(data) {
+        // Handles all cases: single event (eventId), bulk (eventIds), or filter-based
+        return request({
+            url: '/api/updateMaliciousEventStatus',
+            method: 'post',
+            data: data
+        })
+    },
+    deleteMaliciousEvents(data) {
+        // Handles both bulk delete (eventIds) and filter-based delete
+        return request({
+            url: '/api/deleteMaliciousEvents',
+            method: 'post',
+            data: data
+        })
+    },
+    fetchThreatTopNData(startTs, endTs, latestAttack, limit = 5) {
+        return request({
+            url: '/api/fetchThreatTopNData',
+            method: 'post',
+            data: {startTs, endTs, latestAttack: latestAttack || [], limit}
+        })
+    },
+    exportThreatActivityToAdx(startTimestamp, endTimestamp) {
+        return request({
+            url: '/api/exportGuardrailActivityToAdx',
+            method: 'post',
+            data: {
+                startTimestamp: startTimestamp,
+                endTimestamp: endTimestamp,
+                label: 'THREAT'
+            }
+        })
+    },
+    getAdxExportStatus() {
+        return request({
+            url: '/api/getAdxExportStatus',
+            method: 'post',
+            data: {}
+        })
+    },
+    fetchThreatActivityWebhookIntegration() {
+        return request({
+            url: '/api/fetchThreatActivityWebhookIntegration',
+            method: 'post',
+            data: {}
+        })
+    },
+    addThreatActivityWebhookIntegration(webhookUrl, customHeaders, useGzip) {
+        return request({
+            url: '/api/addThreatActivityWebhookIntegration',
+            method: 'post',
+            data: {
+                webhookUrl: webhookUrl,
+                customHeaders: customHeaders || [],
+                useGzip: Boolean(useGzip)
+            }
+        })
+    },
+    generateThreatReport(filtersForReport, threatIdsForReport) {
+        return request({
+            url: '/api/generateThreatReport',
+            method: 'post',
+            data: {
+                filtersForReport: filtersForReport,
+                threatIdsForReport: threatIdsForReport
+            }
+        })
+    },
+    getThreatReportFilters(reportId) {
+        return request({
+            url: '/api/getThreatReportFilters',
+            method: 'post',
+            data: {
+                generatedReportId: reportId
+            }
+        })
+    },
+    downloadThreatReportPDF(reportId, organizationName, reportDate, reportUrl, username, firstPollRequest) {
+        return request({
+            url: '/api/downloadThreatReportPDF',
+            method: 'post',
+            data: {
+                reportId: reportId,
+                organizationName: organizationName,
+                reportDate: reportDate,
+                reportUrl: reportUrl,
+                username: username,
+                firstPollRequest: firstPollRequest
+            }
+        })
+    },
+    fetchThreatComplianceInfos() {
+        return request({
+            url: '/api/fetchThreatComplianceInfos',
+            method: 'post',
+            data: {}
+        })
+    },
+    getIpReputationScore(ipAddress) {
+        return request({
+            url: '/api/getIpReputationScore',
+            method: 'post',
+            data: { ipAddress }
+        })
+    },
+    fetchThreatsForActor(actor, limit = 20) {
+        return request({
+            url: '/api/fetchThreatsForActor',
+            method: 'post',
+            data: { actor, limit }
+        })
+    },
+    fetchSessionContext(sessionId) {
+        return request({
+            url: '/api/fetchSessionContext',
+            method: 'post',
+            data: { sessionId }
         })
     }
 }

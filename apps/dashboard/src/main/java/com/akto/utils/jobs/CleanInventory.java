@@ -1,8 +1,5 @@
 package com.akto.utils.jobs;
 
-import java.io.BufferedWriter;
-import java.io.File;
-import java.io.FileWriter;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -11,20 +8,23 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
-import com.akto.dto.CodeAnalysisRepo;
 import com.mongodb.client.model.Updates;
-import org.bson.conversions.Bson;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.mongodb.client.model.WriteModel;
 
+import org.bson.conversions.Bson;
+
+import com.akto.dao.ApiCollectionsDao;
 import com.akto.dao.ApiInfoDao;
 import com.akto.dao.SampleDataDao;
 import com.akto.dao.SensitiveSampleDataDao;
@@ -33,7 +33,9 @@ import com.akto.dao.context.Context;
 import com.akto.dao.monitoring.FilterYamlTemplateDao;
 import com.akto.dto.Account;
 import com.akto.dto.ApiCollection;
+import com.akto.dto.ApiInfo;
 import com.akto.dto.HttpResponseParams;
+import com.akto.dto.ApiInfo.ApiInfoKey;
 import com.akto.dto.monitoring.FilterConfig;
 import com.akto.dto.monitoring.FilterConfig.FILTER_TYPE;
 import com.akto.dto.test_editor.ExecutorNode;
@@ -47,12 +49,16 @@ import com.akto.log.LoggerMaker;
 import com.akto.log.LoggerMaker.LogDb;
 import com.akto.parsers.HttpCallParser;
 import com.akto.test_editor.execution.ParseAndExecute;
+import com.akto.usage.UsageMetricCalculator;
 import com.akto.util.AccountTask;
+import com.akto.util.Constants;
 import com.akto.util.DashboardMode;
 import com.akto.util.Pair;
 import com.akto.utils.Utils;
 import com.mongodb.BasicDBObject;
+import com.mongodb.client.model.DeleteOneModel;
 import com.mongodb.client.model.Filters;
+import com.mongodb.client.model.Projections;
 import com.mongodb.client.model.Sorts;
 
 import static com.akto.utils.Utils.deleteApis;
@@ -60,8 +66,9 @@ import static com.akto.runtime.utils.Utils.createRegexPatternFromList;
 
 public class CleanInventory {
 
-    private static final LoggerMaker loggerMaker = new LoggerMaker(CleanInventory.class, LogDb.DASHBOARD);
-    private static final Logger logger = LoggerFactory.getLogger(CleanInventory.class);
+    private static final LoggerMaker logger = new LoggerMaker(CleanInventory.class, LogDb.DASHBOARD);
+    private static final int limit = 500;
+    private static final Bson sort = Sorts.ascending(ApiInfo.ID_API_COLLECTION_ID, ApiInfo.ID_URL, ApiInfo.ID_METHOD);
 
     final static ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
 
@@ -71,7 +78,7 @@ public class CleanInventory {
             public void run() {
 
                 int now = Context.now();
-                logger.info("Starting cleanInventoryJob for all accounts at " + now);
+                logger.debug("Starting cleanInventoryJob for all accounts at " + now);
 
                 AccountTask.instance.executeTask(new Consumer<Account>() {
                     @Override
@@ -79,14 +86,14 @@ public class CleanInventory {
                         try {
                             cleanInventoryJob();
                         } catch (Exception e) {
-                            loggerMaker.errorAndAddToDb(e, "Error in cleanInventoryJob");
+                            logger.errorAndAddToDb(e, "Error in cleanInventoryJob");
                         }
                     }
                 }, "clean-inventory-job");
 
                 int now2 = Context.now();
                 int diffNow = now2-now;
-                logger.info(String.format("Completed cleanInventoryJob for all accounts at %d , time taken : %d", now2, diffNow));
+                logger.debug(String.format("Completed cleanInventoryJob for all accounts at %d , time taken : %d", now2, diffNow));
             }
         }, 0, 5, TimeUnit.HOURS);
 
@@ -125,12 +132,12 @@ public class CleanInventory {
         int diff = now2 - now;
 
         if (diff >= 2) {
-            loggerMaker.infoAndAddToDb(String.format("cleanInventoryJob finished, time taken: %d ", diff));
+            logger.infoAndAddToDb(String.format("cleanInventoryJob finished, time taken: %d ", diff));
         }
 
     }
 
-    private static void moveApisFromSampleData(List<Key> sampleDataIds) {
+    public static void moveApisFromSampleData(List<Key> sampleDataIds, boolean skipMergingOnKnownStaticURLsForVersionedApis) {
         if (sampleDataIds.isEmpty()) return;
         
         List<SampleData> allSamples = SampleDataDao.instance.findAll(Filters.or(SampleDataDao.filterForMultipleSampleData(sampleDataIds)));
@@ -143,10 +150,10 @@ public class CleanInventory {
         
 
             try {
-                Utils.pushDataToKafka(allSamples.get(0).getId().getApiCollectionId(), "", messages, new ArrayList<>(), true, false);
-                loggerMaker.infoAndAddToDb("Successfully moved APIs.");
+                Utils.pushDataToKafka(allSamples.get(0).getId().getApiCollectionId(), "", messages, new ArrayList<>(), true, false, false, skipMergingOnKnownStaticURLsForVersionedApis);
+                logger.infoAndAddToDb("Successfully moved APIs.");
             } catch (Exception e) {
-                loggerMaker.errorAndAddToDb("Error during move APIs: " + e.getMessage());
+                logger.errorAndAddToDb("Error during move APIs: " + e.getMessage());
                 e.printStackTrace();
             }
     }
@@ -158,11 +165,9 @@ public class CleanInventory {
         List<SampleData> sampleDataList = new ArrayList<>();
         Bson filters = Filters.empty();
         int skip = 0;
-        int limit = 100;
-        Bson sort = Sorts.ascending("_id.apiCollectionId", "_id.url", "_id.method");
         Map<Integer,Integer> collectionWiseDeletionCountMap = new HashMap<>();
 
-        Map<String,FilterConfig> filterMap = FilterYamlTemplateDao.instance.fetchFilterConfig(false, yamlTemplates, true);
+        Map<String,FilterConfig> filterMap = FilterYamlTemplateDao.fetchFilterConfig(false, yamlTemplates, true);
         Pattern pattern = createRegexPatternFromList(redundantUrlList);
         do {
             sampleDataList = SampleDataDao.instance.findAll(filters, skip, limit, sort);
@@ -175,14 +180,14 @@ public class CleanInventory {
                     List<String> samples = sampleData.getSamples();
                     remainingSamples.clear();
                     if (samples == null || samples.isEmpty()) {
-                        logger.info("[BadApisRemover] No samples found for : " + sampleData.getId());
+                        logger.debug("[BadApisRemover] No samples found for : " + sampleData.getId());
                         continue;
                     }
 
                     ApiCollection apiCollection = apiCollectionMap.get(sampleData.getId().getApiCollectionId());
                     if (apiCollection == null) {
                         if(!DashboardMode.isMetered()){
-                            logger.info("[BadApisRemover] No apiCollection found for : " + sampleData.getId());
+                            logger.debug("[BadApisRemover] No apiCollection found for : " + sampleData.getId());
                         }
                         continue;
                     }
@@ -228,9 +233,9 @@ public class CleanInventory {
                         // any 1 of the sample is modifiable, we print this block
                         toMove.add(sampleData.getId());
                         if(saveLogsToDB){
-                            loggerMaker.infoAndAddToDb("Filter passed, modify sample data of API: " + sampleData.getId(), LogDb.DASHBOARD);
+                            logger.infoAndAddToDb("Filter passed, modify sample data of API: " + sampleData.getId(), LogDb.DASHBOARD);
                         }else{
-                            logger.info("[BadApisUpdater] Updating bad from template API: " + sampleData.getId(), LogDb.DASHBOARD);
+                            logger.debug("[BadApisUpdater] Updating bad from template API: " + sampleData.getId(), LogDb.DASHBOARD);
                         }
                     } else if (isRedundant || (remainingSamples.size() != samples.size())) {
                         if (remainingSamples.isEmpty()) {
@@ -240,11 +245,11 @@ public class CleanInventory {
                             collectionWiseDeletionCountMap.put(sampleData.getId().getApiCollectionId(),initialCount + 1);
                             toBeDeleted.add(sampleData.getId());
                             if(saveLogsToDB){
-                                loggerMaker.infoAndAddToDb(
+                                logger.infoAndAddToDb(
                                         "Filter passed, deleting bad api found from filter: " + sampleData.getId(), LogDb.DASHBOARD
                                 );
                             }else{
-                                logger.info("[BadApisRemover] " + isNetsparkerPresent + " Deleting bad samples from template: " + sampleData.getId(), LogDb.DASHBOARD);
+                                logger.debug("[BadApisRemover] " + isNetsparkerPresent + " Deleting bad samples from template: " + sampleData.getId(), LogDb.DASHBOARD);
                             }
                         } else {
                             if (remainingSamples.size() != samples.size()) {
@@ -253,37 +258,37 @@ public class CleanInventory {
                                     SampleDataDao.instance.updateOneNoUpsert(Filters.eq("_id",sampleData.getId()), Updates.set(SampleData.SAMPLES,remainingSamples));
                                 }
                                 if(saveLogsToDB){
-                                    loggerMaker.infoAndAddToDb(
+                                    logger.infoAndAddToDb(
                                             "Deleting bad samples from sample data " + sampleData.getId(), LogDb.DASHBOARD
                                     );
                                 }else{
-                                    logger.info("[BadApisRemover] " + isNetsparkerPresent + " Deleting bad API from template: " + sampleData.getId(), LogDb.DASHBOARD);
+                                    logger.debug("[BadApisRemover] " + isNetsparkerPresent + " Deleting bad API from template: " + sampleData.getId(), LogDb.DASHBOARD);
                                 }
                             }
                         }
                     } else {
                         // other cases like: => filter from advanced filter is passed || filter from block filter fails
                         if(saveLogsToDB){
-                            loggerMaker.infoAndAddToDb(
+                            logger.infoAndAddToDb(
                                 "Filter did not pass, keeping api found from filter: " + sampleData.getId(), LogDb.DASHBOARD
                             );
                         }else{
-                            logger.info("[BadApisRemover] " + isNetsparkerPresent + " Keeping API from template: " + sampleData.getId(), LogDb.DASHBOARD);
+                            logger.debug("[BadApisRemover] " + isNetsparkerPresent + " Keeping API from template: " + sampleData.getId(), LogDb.DASHBOARD);
                         } 
                         
                     }
                 } catch (Exception e) {
-                    loggerMaker.errorAndAddToDb("[BadApisRemover] Couldn't delete an api for default payload: " + sampleData.getId() + e.getMessage(), LogDb.DASHBOARD);
+                    logger.errorAndAddToDb("[BadApisRemover] Couldn't delete an api for default payload: " + sampleData.getId() + e.getMessage(), LogDb.DASHBOARD);
                 }
             }
             if (shouldDeleteRequest) {
-                logger.info("starting deletion of apis");
+                logger.debug("starting deletion of apis");
                 deleteApis(toBeDeleted);
             }
 
             if (shouldDeleteRequest && toMove.size() > 0) {
-                logger.info("starting moving APIs");
-                moveApisFromSampleData(toMove);
+                logger.debug("starting moving APIs");
+                moveApisFromSampleData(toMove, false);
             }
 
             // String shouldMove = System.getenv("MOVE_REDUNDANT_APIS");
@@ -296,7 +301,7 @@ public class CleanInventory {
             String name = apiCollectionMap.get(collId).getDisplayName();
 
             if(saveLogsToDB){
-                loggerMaker.infoAndAddToDb("Total apis deleted from collection: " + name + " are: " + deletionCount, LogDb.DASHBOARD);
+                logger.infoAndAddToDb("Total apis deleted from collection: " + name + " are: " + deletionCount, LogDb.DASHBOARD);
             }
         }
 
@@ -311,13 +316,13 @@ public class CleanInventory {
                 if (apiCollection.getHostName() == null) {
                     continue;
                 }
-                List<BasicDBObject> endpoints = com.akto.action.observe.Utils.fetchEndpointsInCollectionUsingHost(apiCollection.getId(), 0);
+                List<BasicDBObject> endpoints = ApiCollectionsDao.fetchEndpointsInCollectionUsingHost(apiCollection.getId(), 0, false);
 
                 if (endpoints == null || endpoints.isEmpty()) {
                     continue;
                 }
 
-                logger.info("[BadApisRemover] Starting for APICollection: " + apiCollection.getId(), LogDb.DASHBOARD);
+                logger.debug("[BadApisRemover] Starting for APICollection: " + apiCollection.getId(), LogDb.DASHBOARD);
                 for (BasicDBObject singleTypeInfo: endpoints) {
                     singleTypeInfo = (BasicDBObject) (singleTypeInfo.getOrDefault("_id", new BasicDBObject()));
                     int apiCollectionId = singleTypeInfo.getInt("apiCollectionId");
@@ -327,13 +332,13 @@ public class CleanInventory {
                     Key key = new Key(apiCollectionId, url, Method.fromString(method), -1, 0, 0);
 
                     if (method.equalsIgnoreCase("options")) {
-                        logger.info("[BadApisRemover] OPTIONS Deleting bad API: " + key, LogDb.DASHBOARD);
+                        logger.debug("[BadApisRemover] OPTIONS Deleting bad API: " + key, LogDb.DASHBOARD);
                         toBeDeleted.add(key);
                         continue;
                     }
 
                     if (!method.equalsIgnoreCase("get")) {
-                        logger.info("[BadApisRemover] Non-get Deleting bad API: " + key, LogDb.DASHBOARD);
+                        logger.debug("[BadApisRemover] Non-get Deleting bad API: " + key, LogDb.DASHBOARD);
                         continue;
                     }
 
@@ -351,25 +356,25 @@ public class CleanInventory {
                         );
                         SingleTypeInfo singleTypeInfoForApi = SingleTypeInfoDao.instance.findOne(stiFilterReq);
                         if (singleTypeInfoForApi == null) {
-                            logger.info("[BadApisRemover] no-sample Deleting bad API: " + key, LogDb.DASHBOARD);
+                            logger.debug("[BadApisRemover] no-sample Deleting bad API: " + key, LogDb.DASHBOARD);
                             toBeDeleted.add(key);    
                         } else {
-                            logger.info("[BadApisRemover] yes-sti Deleting bad API: " + key + " " + singleTypeInfoForApi.composeKey(), LogDb.DASHBOARD);
+                            logger.debug("[BadApisRemover] yes-sti Deleting bad API: " + key + " " + singleTypeInfoForApi.composeKey(), LogDb.DASHBOARD);
                         }
                     } else {
-                        logger.info("[BadApisRemover] yes-sample Deleting bad API: " + key, LogDb.DASHBOARD);
+                        logger.debug("[BadApisRemover] yes-sample Deleting bad API: " + key, LogDb.DASHBOARD);
                     }
                 }
 
                 
                 if (shouldDeleteRequest) {
-                    logger.info("starting deletion of apis");
+                    logger.debug("starting deletion of apis");
                     deleteApis(toBeDeleted);
                 }
             }
 
         } catch (Exception e) {
-            loggerMaker.errorAndAddToDb("Couldn't complete scan for APIs remover: " + e.getMessage(), LogDb.DASHBOARD);
+            logger.errorAndAddToDb("Couldn't complete scan for APIs remover: " + e.getMessage(), LogDb.DASHBOARD);
             e.printStackTrace();
         }
     }
@@ -380,7 +385,7 @@ public class CleanInventory {
             if (apiCollection.getHostName() == null) {
                 continue;
             }
-            List<BasicDBObject> endpoints = com.akto.action.observe.Utils.fetchEndpointsInCollectionUsingHost(apiCollection.getId(), 0);
+            List<BasicDBObject> endpoints = ApiCollectionsDao.fetchEndpointsInCollectionUsingHost(apiCollection.getId(), 0, false);
 
             if (endpoints == null || endpoints.isEmpty()) {
                 continue;
@@ -402,4 +407,110 @@ public class CleanInventory {
         }
     }
 
+    public static int deleteApiInfosForMissingSTIs(boolean deleteAPIsInstantly){
+        try {
+            Bson filterInfo = UsageMetricCalculator.excludeDemosAndDeactivated(ApiInfo.ID_API_COLLECTION_ID);
+            Bson filterQ = Filters.and(UsageMetricCalculator.excludeDemosAndDeactivated(Constants.ID));
+            Map<Integer, ApiCollection> apiCollectionMap = ApiCollectionsDao.instance.findAll(filterQ, Projections.include(ApiCollection.ID, ApiCollection.HOST_NAME)).stream().collect(Collectors.toMap(ApiCollection::getId, Function.identity()));
+            ExecutorService executor = Executors.newFixedThreadPool(20);
+            List<Future<Void>> futures = new ArrayList<>();
+            int accountId = Context.accountId.get();
+
+            AtomicInteger counter = new AtomicInteger(0);
+            ArrayList<WriteModel<ApiInfo>> bulkUpdate = new ArrayList<>();
+            
+            for (Integer apiCollectionId : apiCollectionMap.keySet()) {
+                ApiCollection apiCollection = apiCollectionMap.get(apiCollectionId);
+                if (apiCollection == null || apiCollection.getHostName() == null || apiCollection.getHostName().isEmpty()) {
+                    logger.info("Skipping apiCollectionId: " + apiCollectionId + " as it has no hostName");
+                    continue;
+                }
+                futures.add(executor.submit(() -> {
+                    Context.accountId.set(accountId);
+                    try {
+                        List<ApiInfo> actualApiInfosInColl = ApiInfoDao.instance.findAll(
+                            Filters.eq(ApiInfo.ID_API_COLLECTION_ID, apiCollectionId),
+                            Projections.include(Constants.ID)
+                        );
+
+                        logger.info("Found " + actualApiInfosInColl.size() + " apiInfos in collection: " + apiCollectionId);
+                        if(actualApiInfosInColl.isEmpty()){
+                            return null;
+                        }
+
+                        List<BasicDBObject> stisApis = ApiCollectionsDao.fetchEndpointsInCollectionUsingHost(apiCollectionId, 0, false);
+                        Set<ApiInfoKey> apiInfoKeys = stisApis.stream()
+                            .map(sti -> {
+                                BasicDBObject idObj = (BasicDBObject) sti.get(Constants.ID);
+                                if (idObj == null) return null;
+                                int collId = idObj.getInt(ApiInfoKey.API_COLLECTION_ID);
+                                String url = idObj.getString(ApiInfoKey.URL);
+                                String method = idObj.getString(ApiInfoKey.METHOD);
+                                return new ApiInfoKey(collId, url, Method.fromString(method));
+                            })
+                            .filter(java.util.Objects::nonNull)
+                            .collect(Collectors.toSet());
+
+                        logger.info("Found " + apiInfoKeys.size() + " STIs in collection: " + apiCollectionId);
+                        for (ApiInfo apiInfo : actualApiInfosInColl) {
+                            if (!apiInfoKeys.contains(apiInfo.getId())) {
+                                // delete this apiInfo
+                                counter.incrementAndGet();
+                                Bson filter = ApiInfoDao.getFilter(apiInfo.getId());
+                                logger.info("Deleting apiInfo for missing STI host: " + apiInfo.getId());
+                                if(deleteAPIsInstantly){
+                                    bulkUpdate.add(new DeleteOneModel<>(filter));
+                                }
+                                
+                            }
+                        }
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+
+                    return null;
+                }));
+            }
+
+            executor.shutdown();
+            int shutdownTime = deleteAPIsInstantly ? 5 : 1;
+            try {
+                
+                if (!executor.awaitTermination(shutdownTime, TimeUnit.MINUTES)) {
+                    executor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+
+            if (!bulkUpdate.isEmpty() && deleteAPIsInstantly) {
+                ApiInfoDao.instance.getMCollection().bulkWrite(bulkUpdate);
+            }
+
+            counter.addAndGet((int) ApiInfoDao.instance.count(
+                Filters.and(
+                    Filters.nin(ApiInfo.ID_API_COLLECTION_ID, apiCollectionMap.keySet()),
+                    filterInfo
+                )
+            ));
+
+            if (deleteAPIsInstantly) {
+                ApiInfoDao.instance.deleteAll(
+                Filters.and(
+                    Filters.nin(ApiInfo.ID_API_COLLECTION_ID, apiCollectionMap.keySet()),
+                    filterInfo
+                ));
+                
+            } else {
+                logger.info("Found " + counter.get() + " apiInfos for missing STIs, but not deleted as deleteAPIsInstantly is false.");
+            }
+
+            return counter.get();
+        } catch (Exception e) {
+            e.printStackTrace();
+            // TODO: handle exception
+        }
+
+        return 0;
+    }
 }

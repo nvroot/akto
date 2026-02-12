@@ -4,10 +4,14 @@ public class TestEditorEnums {
     
     public enum DataOperands {
         CONTAINS_EITHER,
+        CONTAINS_EITHER_CIDR,
         CONTAINS_ALL,
         NOT_CONTAINS,
         NOT_CONTAINS_EITHER,
+        NOT_CONTAINS_CIDR,
+        CONFORM_SCHEMA,
         REGEX,
+        REGEX_EXTRACT,
         EQ,
         EQ_OBJ,
         GTE,
@@ -21,7 +25,15 @@ public class TestEditorEnums {
         COOKIE_EXPIRE_FILTER,
         DATATYPE,
         BELONGS_TO_COLLECTIONS,
-        VALUETYPE
+        VALUETYPE,
+        MAGIC_VALIDATE,
+        NOT_MAGIC_VALIDATE,
+        CATEGORY,
+        CONFIDENCE,
+        ACTION,
+        TYPE,
+        PATTERN,
+        REPLACEMENT_STRING
     }
 
     public enum CollectionOperands {
@@ -38,7 +50,11 @@ public class TestEditorEnums {
         REQUEST_PAYLOAD,
         RESPONSE_HEADERS,
         RESPONSE_PAYLOAD,
-        RESPONSE_CODE
+        RESPONSE_CODE,
+        SOURCE_IP,
+        DESTINATION_IP,
+        COUNTRY_CODE,
+        TEST_TYPE,
     }
 
     public enum PredicateOperator {
@@ -56,7 +72,8 @@ public class TestEditorEnums {
     public enum BodyOperator {
         LENGTH,
         PERCENTAGE_MATCH,
-        PERCENTAGE_MATCH_SCHEMA
+        PERCENTAGE_MATCH_SCHEMA,
+        NLP_CLASSIFICATION
     }
 
     public enum ExtractOperator {
@@ -216,6 +233,8 @@ public class TestEditorEnums {
         JWT_REPLACE_BODY,
         ATTACH_FILE,
         SEND_SSRF_REQ,
+        FOR_EACH_COMBINATION,
+        ACTION
     }
 
     public enum NonTerminalExecutorDataOperands {
@@ -227,7 +246,8 @@ public class TestEditorEnums {
         MODIFY_QUERY_PARAM,
         ADD_GRAPHQL_FIELD,
         ADD_UNIQUE_GRAPHQL_FIELD,
-        MODIFY_GRAPHQL_FIELD
+        MODIFY_GRAPHQL_FIELD,
+        CONVERSATIONS_LIST
     }
 
     public enum TerminalNonExecutableDataOperands {
@@ -235,7 +255,8 @@ public class TestEditorEnums {
         TEST_NAME,
         LABEL,
         SUCCESS,
-        FAILURE
+        FAILURE,
+        WAIT
     }
 
     public enum ValidateExecutorDataOperands {
@@ -353,6 +374,10 @@ public class TestEditorEnums {
         }
 
         return ExecutorOperandTypes.Data.toString().toLowerCase();
+    }
+
+    public static boolean isTestTypeValid(String testType) {
+        return testType.equalsIgnoreCase("AGENTIC") || testType.equalsIgnoreCase("MANUAL");
     }
 
 }

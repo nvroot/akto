@@ -1,22 +1,63 @@
-import { Badge, Box, Button, Divider, HorizontalStack, Modal, Text, VerticalStack } from "@shopify/polaris";
+import { Badge, Box, Button, Divider, HorizontalStack, Modal, Text, Tooltip, VerticalStack, Popover, ActionList, Avatar, Spinner } from "@shopify/polaris";
 import FlyLayout from "../../../components/layouts/FlyLayout";
 import SampleDataList from "../../../components/shared/SampleDataList";
 import LayoutWithTabs from "../../../components/layouts/LayoutWithTabs";
 import func from "@/util/func";
 import { useEffect, useState } from "react";
 import testingApi from "../../testing/api"
+import threatDetectionApi from "../api"
+import issuesApi from "../../issues/api"
 import MarkdownViewer from "../../../components/shared/MarkdownViewer";
 import TooltipText from "../../../components/shared/TooltipText";
 import ActivityTracker from "../../dashboard/components/ActivityTracker";
+import settingFunctions from "../../settings/module";
+import JiraTicketCreationModal from "../../../components/shared/JiraTicketCreationModal";
+import transform from "../../testing/transform";
+import issuesFunctions from "../../issues/module";
+import { GUARDRAIL_SECTIONS, GUARDRAIL_REMEDIATION_MARKDOWN } from "../constants/guardrailDescriptions";
+import { isAgenticSecurityCategory, isEndpointSecurityCategory } from "../../../../main/labelHelper";
 
 function SampleDetails(props) {
-    const { showDetails, setShowDetails, data, title, moreInfoData, threatFiltersMap } = props
-    let currentTemplateObj = threatFiltersMap[moreInfoData?.templateId]
+    const { showDetails, setShowDetails, data, title, moreInfoData, threatFiltersMap, eventId, eventStatus, onStatusUpdate } = props
+    const resolvedThreatFiltersMap = threatFiltersMap || {};
 
-    let severity = currentTemplateObj?.severity || "HIGH"
+    // Determine if we should use hardcoded guardrail descriptions
+    const useGuardrailDescription = isAgenticSecurityCategory() || isEndpointSecurityCategory();
+
+    // Get template object - either from hardcoded data or YAML templates
+    let currentTemplateObj;
+    if (useGuardrailDescription) {
+        // For Argus/Atlas guardrails, use structured content
+        currentTemplateObj = {
+            guardrailSections: GUARDRAIL_SECTIONS,
+            testName: moreInfoData?.templateId || "Guardrail Policy",
+            name: moreInfoData?.templateId || "Guardrail Policy"
+        };
+    } else {
+        // Normal threat detection - use YAML templates
+        currentTemplateObj = moreInfoData?.templateId ? resolvedThreatFiltersMap[moreInfoData?.templateId] : undefined;
+    }
+
+    let severity = moreInfoData?.severity || currentTemplateObj?.severity || "HIGH"
     const [remediationText, setRemediationText] = useState("")
     const [latestActivity, setLatestActivity] = useState([])
-    const [showModal, setShowModal] = useState(false);
+    const [showModal, setShowModal] = useState(false);  
+    const [triageLoading, setTriageLoading] = useState(false);
+    const [actionPopoverActive, setActionPopoverActive] = useState(false);
+
+    // Jira ticket states
+    const [jiraTicketUrl, setJiraTicketUrl] = useState(props.jiraTicketUrl || "");
+    const [modalActive, setModalActive] = useState(false);
+    const [jiraProjectMaps, setJiraProjectMaps] = useState({});
+    const [projId, setProjId] = useState("");
+    const [issueType, setIssueType] = useState("");
+
+    // Azure Boards work item states
+    const [azureBoardsWorkItemUrl, setAzureBoardsWorkItemUrl] = useState(props.azureBoardsWorkItemUrl || "");
+    const [boardsModalActive, setBoardsModalActive] = useState(false);
+    const [projectToWorkItemsMap, setProjectToWorkItemsMap] = useState({});
+    const [projectId, setProjectId] = useState("");
+    const [workItemType, setWorkItemType] = useState("");
 
     const fetchRemediationInfo = async() => {
         if(moreInfoData?.templateId !== undefined){
@@ -28,7 +69,64 @@ function SampleDetails(props) {
         }
         
     }
-    const overviewComp = (
+    const overviewComp = useGuardrailDescription ? (
+        // Structured view for Argus/Atlas guardrails - show all 7 sections with hierarchy
+        <Box padding={"4"}>
+            <VerticalStack gap={"5"}>
+                {currentTemplateObj?.guardrailSections?.map((section, sectionIdx) => (
+                    <div key={sectionIdx}>
+                        <VerticalStack gap={"3"}>
+                            {/* Main Section Heading (numbered) */}
+                            <Text variant="headingMd" fontWeight="bold">
+                                {sectionIdx + 1}. {section.heading}
+                            </Text>
+
+                            {/* Main Section Description */}
+                            <Text variant="bodyMd">{section.description}</Text>
+
+                            {/* Sub-sections if present */}
+                            {section.subSections && section.subSections.length > 0 && (
+                                <VerticalStack gap={"3"} paddingBlockStart={"2"}>
+                                    {section.subSections.map((subSection, subIdx) => (
+                                        <div key={subIdx}>
+                                            <VerticalStack gap={"2"}>
+                                                {/* Sub-section Heading */}
+                                                <Text variant="headingSm" fontWeight="semibold">
+                                                    {subSection.subHeading}:
+                                                </Text>
+
+                                                {/* Sub-section Description */}
+                                                <Text variant="bodyMd">{subSection.description}</Text>
+
+                                                {/* Items list if present */}
+                                                {subSection.items && subSection.items.length > 0 && (
+                                                    <Box paddingInlineStart={"4"} paddingBlockStart={"1"}>
+                                                        <VerticalStack gap={"2"}>
+                                                            {subSection.items.map((item, itemIdx) => (
+                                                                <Text key={itemIdx} variant="bodyMd">• {item}</Text>
+                                                            ))}
+                                                        </VerticalStack>
+                                                    </Box>
+                                                )}
+                                            </VerticalStack>
+                                        </div>
+                                    ))}
+                                </VerticalStack>
+                            )}
+                        </VerticalStack>
+
+                        {/* Divider between sections (except last) */}
+                        {sectionIdx < currentTemplateObj.guardrailSections.length - 1 && (
+                            <Box paddingBlockStart={"4"}>
+                                <Divider />
+                            </Box>
+                        )}
+                    </div>
+                ))}
+            </VerticalStack>
+        </Box>
+    ) : (
+        // Full view for normal threat detection (existing code)
         <Box padding={"4"}>
             <VerticalStack gap={"5"}>
                 <VerticalStack gap={"2"}>
@@ -45,6 +143,28 @@ function SampleDetails(props) {
                     <Text variant="headingMd">Impact</Text>
                     <Text variant="bodyMd">{currentTemplateObj?.impact || "-"}</Text>
                 </VerticalStack>
+                <Divider />
+                <VerticalStack gap={"2"}>
+                    <Text variant="headingMd">Compliance</Text>
+                    {currentTemplateObj?.compliance?.mapComplianceToListClauses &&
+                     Object.keys(currentTemplateObj.compliance.mapComplianceToListClauses).length > 0 ? (
+                        <HorizontalStack gap={2} wrap>
+                            {Object.keys(currentTemplateObj.compliance.mapComplianceToListClauses).map((complianceName, idx) => (
+                                <HorizontalStack key={idx} gap={1} blockAlign="center">
+                                    <Avatar
+                                        source={func.getComplianceIcon(complianceName)}
+                                        shape="square"
+                                        size="extraSmall"
+                                    />
+                                    <Text>{complianceName}</Text>
+                                </HorizontalStack>
+                            ))}
+                        </HorizontalStack>
+                    ) : (
+                        <Text variant="bodyMd" color="subdued">-</Text>
+                    )}
+                </VerticalStack>
+                <Divider />
             </VerticalStack>
         </Box>
     )
@@ -80,63 +200,673 @@ function SampleDetails(props) {
         component: <ActivityTracker latestActivity={latestActivity} />
     }
 
-    const ValuesTab = {
+    const ValuesTab = data.length > 0 && {
         id: 'values',
         content: "Values",
         component: (
-        <Box paddingBlockStart={3} paddingInlineEnd={4} paddingInlineStart={4}>
-            <SampleDataList
-                key="Sample values"
-                heading={"Attempt"}
-                minHeight={"30vh"}
-                vertical={true}
-                sampleData={data?.map((result) => {
-                    return {message:result.orig, highlightPaths:[]}
-                })}
-            />
-        </Box>)
+            <Box paddingBlockStart={3} paddingInlineEnd={4} paddingInlineStart={4}>
+                <SampleDataList
+                    key={`Sample values-${eventId || 'default'}`}
+                    heading={"Attempt"}
+                    minHeight={"30vh"}
+                    vertical={true}
+                    sampleData={data && Array.isArray(data) && data.length > 0 ? data.map((result) => {
+                        return { message: result.orig, highlightPaths: [], metadata: result.metadata }
+                    }) : []}
+                />
+            </Box>)
     }
 
-    const remediationTab = remediationText.length > 0 && {
+    const remediationTab = useGuardrailDescription ? {
+        id: "remediation",
+        content: "Remediation",
+        component: (<MarkdownViewer markdown={GUARDRAIL_REMEDIATION_MARKDOWN}></MarkdownViewer>)
+    } : (remediationText.length > 0 && {
         id: "remediation",
         content: "Remediation",
         component: (<MarkdownViewer markdown={remediationText}></MarkdownViewer>)
+    })
+
+    // Session Context Tab - shows prompts involved in session-based detection
+    const SessionContextComponent = () => {
+        // Determine if this is session-based by checking if sessionId is present and not empty
+        const sessionId = moreInfoData?.sessionId;
+        const isSessionBased = sessionId && sessionId !== '';
+
+        const [sessionData, setSessionData] = useState(null);
+        const [sessionLoading, setSessionLoading] = useState(false);
+        const [sessionError, setSessionError] = useState(null);
+
+        // Fetch session data from agentic_session_context table API using sessionId
+        useEffect(() => {
+            if (isSessionBased) {
+                setSessionLoading(true);
+                setSessionError(null);
+
+                threatDetectionApi.fetchSessionContext(sessionId)
+                    .then((resp) => {
+                        if (resp && resp.sessionData) {
+                            setSessionData(resp.sessionData);
+                        } else {
+                            setSessionError(resp?.errorMessage || "Session data not found");
+                        }
+                    })
+                    .catch((err) => {
+                        setSessionError("Failed to fetch session data");
+                    })
+                    .finally(() => {
+                        setSessionLoading(false);
+                    });
+            }
+        }, [sessionId, isSessionBased]);
+
+        // Parse conversation info from session data
+        let sessionPrompts = [];
+        let sessionSummary = null;
+        let blockedReason = null;
+
+        if (sessionData) {
+            sessionSummary = sessionData.sessionSummary;
+            blockedReason = sessionData.blockedReason;
+
+            // Map conversationInfo to the format expected by the display logic
+            if (sessionData.conversationInfo && Array.isArray(sessionData.conversationInfo)) {
+                sessionPrompts = sessionData.conversationInfo.map((conv) => {
+                    // Parse request and response payloads if they're JSON strings
+                    let requestContent = conv.requestPayload;
+                    let responseContent = conv.responsePayload;
+
+                    try {
+                        if (typeof requestContent === 'string') {
+                            const parsed = JSON.parse(requestContent);
+                            requestContent = parsed.prompt || parsed.content || requestContent;
+                        }
+                    } catch (e) {
+                        // Keep as is if not valid JSON
+                    }
+
+                    try {
+                        if (typeof responseContent === 'string') {
+                            const parsed = JSON.parse(responseContent);
+                            responseContent = parsed.response || parsed.content || responseContent;
+                        }
+                    } catch (e) {
+                        // Keep as is if not valid JSON
+                    }
+
+                    return {
+                        content: requestContent,
+                        response: responseContent,
+                        timestamp: conv.timestamp,
+                        requestId: conv.requestId
+                    };
+                });
+            }
+        }
+
+        // Format timestamp to show full date and time (not just date)
+        const formatTimestamp = (timestamp) => {
+            if (!timestamp) return '';
+            const date = new Date(timestamp * 1000);
+            return date.toLocaleString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                year: 'numeric',
+                hour: 'numeric',
+                minute: '2-digit',
+                hour12: true
+            });
+        };
+
+        return (
+            <Box padding={"4"}>
+                <VerticalStack gap={"5"}>
+                    <VerticalStack gap={"2"}>
+                        <Text variant="headingMd">Detection Type</Text>
+                        <HorizontalStack gap={"2"}>
+                            <Badge status={isSessionBased ? 'info' : 'default'}>
+                                {isSessionBased ? 'Session-based' : 'Single Prompt'}
+                            </Badge>
+                            {sessionId && (
+                                <Text variant="bodySm" color="subdued">Session ID: {sessionId}</Text>
+                            )}
+                        </HorizontalStack>
+                    </VerticalStack>
+
+                    {isSessionBased && (
+                        <>
+                            {sessionLoading && (
+                                <>
+                                    <Divider />
+                                    <Box padding={"4"}>
+                                        <HorizontalStack gap={"2"} align="center">
+                                            <Spinner size="small" />
+                                            <Text variant="bodyMd" color="subdued">Loading session data...</Text>
+                                        </HorizontalStack>
+                                    </Box>
+                                </>
+                            )}
+
+                            {sessionError && !sessionLoading && (
+                                <>
+                                    <Divider />
+                                    <Box padding={"3"} background="bg-surface-critical" borderRadius="200">
+                                        <Text variant="bodyMd" color="critical">
+                                            {sessionError}
+                                        </Text>
+                                    </Box>
+                                </>
+                            )}
+
+                            {!sessionLoading && !sessionError && sessionSummary && (
+                                <>
+                                    <Divider />
+                                    <VerticalStack gap={"2"}>
+                                        <Text variant="headingMd">Session Summary</Text>
+                                        <Box padding={"4"} background="bg-surface-caution" borderRadius="200">
+                                            <Text variant="bodyMd">
+                                                {sessionSummary}
+                                            </Text>
+                                        </Box>
+                                    </VerticalStack>
+                                </>
+                            )}
+
+                            {!sessionLoading && !sessionError && blockedReason && (
+                                <>
+                                    <Divider />
+                                    <VerticalStack gap={"2"}>
+                                        <Text variant="headingMd">Reason</Text>
+                                        <Box padding={"3"} background="bg-surface-critical" borderRadius="200">
+                                            <Text variant="bodyMd" color="critical">
+                                                {blockedReason}
+                                            </Text>
+                                        </Box>
+                                    </VerticalStack>
+                                </>
+                            )}
+
+                            {/* Detection Reason - show all reasons from blocked prompts */}
+                            {!sessionLoading && !sessionError && sessionPrompts.some(p => p.detectionReason) && (
+                                <>
+                                    <Divider />
+                                    <VerticalStack gap={"2"}>
+                                        <Box padding={"3"} background="bg-surface-critical" borderRadius="200">
+                                            <VerticalStack gap={"2"}>
+                                                {sessionPrompts
+                                                    .filter(p => p.detectionReason)
+                                                    .map((prompt, idx) => (
+                                                        <HorizontalStack key={idx} gap={"1"}>
+                                                            <Text variant="bodyMd" fontWeight="semibold" color="critical">
+                                                                Reason:
+                                                            </Text>
+                                                            <Text variant="bodyMd" color="critical">
+                                                                {prompt.detectionReason}
+                                                            </Text>
+                                                        </HorizontalStack>
+                                                    ))}
+                                            </VerticalStack>
+                                        </Box>
+                                    </VerticalStack>
+                                </>
+                            )}
+
+                            {!sessionLoading && !sessionError && sessionPrompts.length > 0 && (
+                                <>
+                                    <Divider />
+                                    <VerticalStack gap={"4"}>
+                                        <Text variant="headingMd">Conversation Timeline ({sessionPrompts.length} exchanges)</Text>
+
+                                        <VerticalStack gap={"4"}>
+                                            {sessionPrompts.map((prompt, idx) => (
+                                                <Box key={idx} padding={"4"} background="bg-surface-secondary" borderRadius="200">
+                                                    <VerticalStack gap={"4"}>
+                                                        {/* Prompt section */}
+                                                        <VerticalStack gap={"2"}>
+                                                            <HorizontalStack align="space-between" blockAlign="center">
+                                                                <Badge size="small" tone="info">
+                                                                    Prompt {idx + 1}
+                                                                </Badge>
+                                                                {prompt.timestamp && (
+                                                                    <Text variant="bodySm" color="subdued">
+                                                                        {formatTimestamp(prompt.timestamp)}
+                                                                    </Text>
+                                                                )}
+                                                            </HorizontalStack>
+                                                            <Box
+                                                                padding={"3"}
+                                                                background="bg-surface"
+                                                                borderRadius="200"
+                                                                style={{
+                                                                    maxHeight: '200px',
+                                                                    overflowY: 'auto',
+                                                                    fontSize: '14px',
+                                                                    lineHeight: '1.6',
+                                                                    wordBreak: 'break-word',
+                                                                    whiteSpace: 'pre-wrap'
+                                                                }}
+                                                            >
+                                                                <Text variant="bodyMd">
+                                                                    {prompt.content || prompt.snippet || prompt}
+                                                                </Text>
+                                                            </Box>
+                                                        </VerticalStack>
+
+                                                        {/* Agent Response section */}
+                                                        {prompt.response && (
+                                                            <VerticalStack gap={"2"}>
+                                                                <HorizontalStack gap={"2"}>
+                                                                    <Text variant="headingSm" fontWeight="medium">
+                                                                        Agent Response
+                                                                    </Text>
+                                                                    {prompt.flagged && (
+                                                                        <Badge tone="critical" size="small">🚫 Blocked</Badge>
+                                                                    )}
+                                                                </HorizontalStack>
+                                                                <Box
+                                                                    padding={"3"}
+                                                                    background="bg-surface"
+                                                                    borderRadius="200"
+                                                                    style={{
+                                                                        maxHeight: '200px',
+                                                                        overflowY: 'auto',
+                                                                        fontSize: '14px',
+                                                                        lineHeight: '1.6',
+                                                                        wordBreak: 'break-word',
+                                                                        whiteSpace: 'pre-wrap'
+                                                                    }}
+                                                                >
+                                                                    <Text variant="bodyMd">
+                                                                        {prompt.response}
+                                                                    </Text>
+                                                                </Box>
+                                                            </VerticalStack>
+                                                        )}
+                                                    </VerticalStack>
+                                                </Box>
+                                            ))}
+                                        </VerticalStack>
+                                    </VerticalStack>
+                                </>
+                            )}
+                        </>
+                    )}
+
+                    {!isSessionBased && (
+                        <>
+                            <Divider />
+                            <Box padding={"3"} background="bg-surface-secondary" borderRadius="200">
+                                <Text variant="bodyMd" color="subdued">
+                                    This threat was detected based on a single prompt analysis without session context.
+                                </Text>
+                            </Box>
+                        </>
+                    )}
+                </VerticalStack>
+            </Box>
+        );
+    };
+
+    const sessionContextTab = data.length > 0 && {
+        id: "session-context",
+        content: "Session Context",
+        component: <SessionContextComponent />
     }
 
     useEffect(() => {
-       fetchRemediationInfo()
-       aggregateActivity()
-    },[moreInfoData?.templateId, data])
+        fetchRemediationInfo()
+        aggregateActivity()
+    }, [moreInfoData?.templateId, data])
+
+    useEffect(() => {
+        setJiraTicketUrl(props.jiraTicketUrl || "")
+    }, [props.jiraTicketUrl])
+
+    useEffect(() => {
+        setAzureBoardsWorkItemUrl(props.azureBoardsWorkItemUrl || "")
+    }, [props.azureBoardsWorkItemUrl])
+
+    // Initialize Azure Boards metadata if integrated
+    useEffect(() => {
+        if (window.AZURE_BOARDS_INTEGRATED === 'true') {
+            issuesFunctions.fetchCreateABWorkItemFieldMetaData()
+        }
+    }, [])
 
     const openTest = (id) => {
         const navigateUrl = window.location.origin + "/dashboard/protection/threat-policy?policy=" + id
         window.open(navigateUrl, "_blank")
     }
 
+    const handleStatusChange = async (newStatus) => {
+        if (!eventId) return;
+
+        setActionPopoverActive(false);
+        
+        setTriageLoading(true);
+        try {
+            const response = await threatDetectionApi.updateMaliciousEventStatus({ eventId: eventId, status: newStatus });
+            if (response?.updateSuccess) {
+                // Update parent state instead of refreshing page
+                if (onStatusUpdate) {
+                    onStatusUpdate(newStatus);
+                }
+                const statusText = newStatus === 'UNDER_REVIEW' ? 'marked for review' :
+                                 newStatus === 'IGNORED' ? 'ignored' : 'reactivated';
+                func.setToast(true, false, `Event ${statusText} successfully`);
+            } else {
+                func.setToast(true, true, 'Failed to update event status');
+            }
+        } catch (error) {
+        } finally {
+            setTriageLoading(false);
+        }
+    }
+
+    const handleJiraClick = async () => {
+        if (!modalActive) {
+            try {
+                const jiraIntegration = await settingFunctions.fetchJiraIntegration();
+                if (jiraIntegration.projectIdsMap !== null && Object.keys(jiraIntegration.projectIdsMap).length > 0) {
+                    setJiraProjectMaps(jiraIntegration.projectIdsMap);
+                    if (Object.keys(jiraIntegration.projectIdsMap).length > 0) {
+                        setProjId(Object.keys(jiraIntegration.projectIdsMap)[0]);
+                    }
+                } else {
+                    setProjId(jiraIntegration.projId || '');
+                    setIssueType(jiraIntegration.issueType || '');
+                }
+            } catch (error) {
+                func.setToast(true, true, "Failed to fetch Jira integration settings");
+            }
+        }
+        setModalActive(!modalActive);
+    }
+
+    const createJiraTicket = async (threatEventId, projId, issueType) => {
+        if (!threatEventId || !projId || !issueType) {
+            func.setToast(true, true, "Missing required parameters");
+            return;
+        }
+
+        try {
+            // Extract host and endpoint from URL
+            const url = moreInfoData?.url || "";
+            let hostStr = "";
+            let endPointStr = "";
+
+            try {
+                if (url.startsWith("http")) {
+                    const urlObj = new URL(url);
+                    hostStr = urlObj.host;
+                    endPointStr = urlObj.pathname;
+                } else {
+                    hostStr = url;
+                    endPointStr = url;
+                }
+            } catch (err) {
+                hostStr = url;
+                endPointStr = url;
+            }
+
+            // Build issue title and description (Jira-compatible formatting)
+            const issueTitle = currentTemplateObj?.testName || currentTemplateObj?.name || moreInfoData?.templateId;
+            const attackCount = data?.length || 0;
+            const issueDescription = `Threat Detection Alert
+
+Template ID: ${moreInfoData?.templateId}
+Severity: ${severity}
+Attack Count: ${attackCount}
+Host: ${hostStr}
+Endpoint: ${endPointStr}
+
+Description:
+${currentTemplateObj?.description || "No description available"}
+
+Details:
+${currentTemplateObj?.details || "N/A"}
+
+Impact:
+${currentTemplateObj?.impact || "N/A"}
+
+Reference URL: ${window.location.href}`.trim();
+
+            func.setToast(true, false, "Creating Jira Ticket");
+
+            // Call createGeneralJiraTicket API (similar to ActionItemsContent)
+            const response = await issuesApi.createGeneralJiraTicket({
+                title: issueTitle,
+                description: issueDescription,
+                projId,
+                issueType,
+                threatEventId: threatEventId
+            });
+
+            if (response?.errorMessage) {
+                func.setToast(true, true, response?.errorMessage);
+                return;
+            }
+
+            // Update local state with the Jira ticket URL
+            if (response?.jiraTicketUrl) {
+                setJiraTicketUrl(response.jiraTicketUrl);
+                func.setToast(true, false, "Jira Ticket Created Successfully");
+            }
+
+        } catch (error) {
+            func.setToast(true, true, "Failed to create Jira ticket");
+        }
+    }
+
+    const handleSaveAction = async () => {
+        if (!projId || !issueType) {
+            func.setToast(true, true, "Please select a project and issue type");
+            return;
+        }
+
+        await createJiraTicket(eventId, projId, issueType);
+        setModalActive(false);
+    }
+
+    const handleAzureBoardClick = async () => {
+        if (!boardsModalActive) {
+            try {
+                const azureBoardsIntegration = await settingFunctions.fetchAzureBoardsIntegration();
+                if (azureBoardsIntegration.projectToWorkItemsMap != null && Object.keys(azureBoardsIntegration.projectToWorkItemsMap).length > 0) {
+                    setProjectToWorkItemsMap(azureBoardsIntegration.projectToWorkItemsMap);
+                    if (Object.keys(azureBoardsIntegration.projectToWorkItemsMap).length > 0) {
+                        setProjectId(Object.keys(azureBoardsIntegration.projectToWorkItemsMap)[0]);
+                        setWorkItemType(Object.values(azureBoardsIntegration.projectToWorkItemsMap)[0]?.[0]);
+                    }
+                } else {
+                    setProjectId(azureBoardsIntegration?.projectId || '');
+                    setWorkItemType(azureBoardsIntegration?.workItemType || '');
+                }
+            } catch (error) {
+                func.setToast(true, true, "Failed to fetch Azure Boards integration settings");
+            }
+        }
+        setBoardsModalActive(!boardsModalActive);
+    }
+
+    const createAzureBoardsWorkItem = async (threatEventId, projectName, workItemType) => {
+        if (!threatEventId || !projectName || !workItemType) {
+            func.setToast(true, true, "Missing required parameters");
+            return;
+        }
+
+        try {
+            // Extract host from request data and endpoint from moreInfoData
+            let hostStr = "";
+            const endPointStr = moreInfoData?.url || "";
+            
+            // Try to extract host from request headers in the data
+            if (data && data.length > 0 && data[0]?.orig) {
+                try {
+                    const requestData = typeof data[0].orig === 'string' ? JSON.parse(data[0].orig) : data[0].orig;
+                    
+                    // Check if requestHeaders exists and parse it
+                    if (requestData?.requestHeaders) {
+                        const requestHeaders = typeof requestData.requestHeaders === 'string' 
+                            ? JSON.parse(requestData.requestHeaders) 
+                            : requestData.requestHeaders;
+                        
+                        // Extract host from headers (case-insensitive)
+                        if (requestHeaders) {
+                            hostStr = requestHeaders.host || requestHeaders.Host || requestHeaders.HOST || "";
+                        }
+                    }
+                } catch (err) {
+                    // If parsing fails, continue with empty host
+                    console.error("Error extracting host from request data:", err);
+                }
+            }
+            
+            // Fallback: if host not found, use endpoint as fallback
+            if (!hostStr) {
+                hostStr = endPointStr || "Unknown";
+            }
+
+            // Build work item title and description
+            // Note: Description, Details, and Impact will be added by backend from threat policy template
+            // Title will be formatted as "Policy Name - Endpoint" by backend
+            const workItemTitle = currentTemplateObj?.testName || currentTemplateObj?.name || moreInfoData?.templateId;
+            const attackCount = data?.length || 0;
+            const workItemDescription = `Threat Detection Alert
+
+Template ID: ${moreInfoData?.templateId}
+Severity: ${severity}
+Attack Count: ${attackCount}
+Host: ${hostStr}
+Endpoint: ${endPointStr}
+
+Reference URL: ${window.location.href}`.trim();
+
+            // Prepare custom fields payload
+            let customABWorkItemFieldsPayload = [];
+            try {
+                customABWorkItemFieldsPayload = issuesFunctions.prepareCustomABWorkItemFieldsPayload(projectName, workItemType);
+            } catch (error) {
+                func.setToast(true, true, "Please fill all required fields before creating an Azure Boards work item.");
+                return;
+            }
+
+            func.setToast(true, false, "Creating Azure Boards Work Item");
+
+            // Extract originalMessage from first attempt data for attachment
+            // For threat activity, orig contains both request and response
+            const originalMessage = data && data.length > 0 && data[0]?.orig 
+                ? (typeof data[0].orig === 'string' ? data[0].orig : JSON.stringify(data[0].orig))
+                : null;
+
+            // Call createGeneralAzureBoardsWorkItem API
+            const response = await issuesApi.createGeneralAzureBoardsWorkItem({
+                title: workItemTitle,
+                description: workItemDescription,
+                projectName,
+                workItemType,
+                threatEventId: threatEventId,
+                templateId: moreInfoData?.templateId,  // Pass templateId (filterId) from threat policy
+                endpoint: endPointStr,  // Pass endpoint for title formatting
+                aktoDashboardHostName: window.location.origin,
+                customABWorkItemFieldsPayload,
+                originalMessage: originalMessage  // Pass request/response data for attachment
+            });
+
+            if (response?.errorMessage) {
+                func.setToast(true, true, response?.errorMessage);
+                return;
+            }
+
+            // Update local state with the work item URL
+            if (response?.azureBoardsWorkItemUrl) {
+                setAzureBoardsWorkItemUrl(response.azureBoardsWorkItemUrl);
+                func.setToast(true, false, "Azure Boards Work Item Created Successfully");
+            }
+
+        } catch (error) {
+            func.setToast(true, true, "Failed to create Azure Boards work item");
+        }
+    }
+
+    const handleAzureBoardSaveAction = async () => {
+        if (!projectId || !workItemType) {
+            func.setToast(true, true, "Please select a project and work item type");
+            return;
+        }
+
+        await createAzureBoardsWorkItem(eventId, projectId, workItemType);
+        setBoardsModalActive(false);
+    }
+
     function TitleComponent () {
         return(
-            <Box padding={"4"} paddingBlockStart={"0"}>
+            <Box padding={"4"} paddingBlockStart={"0"} maxWidth="100%">
                 <HorizontalStack wrap={false} align="space-between" gap={"6"}>
-                    <VerticalStack gap={"2"}>
-                        <HorizontalStack gap={"2"}>
-                            <Button onClick={() => openTest(moreInfoData?.templateId)} removeUnderline plain monochrome>
-                                <Box maxWidth="180px">
-                                    <TooltipText tooltip={moreInfoData?.templateId} text={moreInfoData?.templateId} textProps={{variant: 'headingMd'}}  />
-                                </Box>
-                            </Button> 
-                            <div className={`badge-wrapper-${severity}`}>
-                                <Badge size="small">{func.toSentenceCase(severity)}</Badge>
-                            </div>
-                        </HorizontalStack>
-                        <HorizontalStack gap={"1"} wrap={false}>
-                            <Text color="subdued" variant="bodySm">{moreInfoData.url}</Text>
-                            <Box width="1px" borderColor="border-subdued" borderInlineStartWidth="1" minHeight='16px'/>
-                            <Text color="subdued" variant="bodySm">{currentTemplateObj?.category?.name || "-"}</Text>
-                        </HorizontalStack>
-                    </VerticalStack>
-                    <HorizontalStack gap={"2"}>
+                    <Box maxWidth="50%">
+                        <VerticalStack gap={"2"}>
+                            <HorizontalStack gap={"2"} align="start">
+                                <Button onClick={() => openTest(moreInfoData?.templateId)} removeUnderline plain monochrome>
+                                    <Box maxWidth="180px">
+                                        <TooltipText tooltip={moreInfoData?.templateId} text={moreInfoData?.templateId} textProps={{variant: 'headingMd'}}  />
+                                    </Box>
+                                </Button> 
+                                <div className={`badge-wrapper-${severity}`}>
+                                    <Badge size="small">{func.toSentenceCase(severity)}</Badge>
+                                </div>
+                            </HorizontalStack>
+                            <HorizontalStack gap={"1"} wrap={false}>
+                                <Tooltip content={moreInfoData?.url}>
+                                    <Text color="subdued" variant="bodySm" truncate>{moreInfoData?.url}</Text>
+                                </Tooltip>
+                                {
+                                    currentTemplateObj?.category?.name && (
+                                        <>
+                                            <Box width="1px" borderColor="border-subdued" borderInlineStartWidth="1" minHeight='16px'/>
+                                            <Text color="subdued" variant="bodySm">{currentTemplateObj?.category?.name || "-"}</Text>
+                                        </>
+                                    )
+                                }
+                            </HorizontalStack>
+                        </VerticalStack>
+                    </Box>
+                    <HorizontalStack gap={"2"} wrap={false}>
+                        <Popover
+                            active={actionPopoverActive}
+                            activator={
+                                <Button
+                                    size="slim"
+                                    onClick={() => setActionPopoverActive(!actionPopoverActive)}
+                                    disclosure
+                                    loading={triageLoading}
+                                    disabled={!eventId}
+                                >
+                                    Event Actions
+                                </Button>
+                            }
+                            onClose={() => setActionPopoverActive(false)}
+                        >
+                            <ActionList
+                                items={[
+                                    eventStatus === 'UNDER_REVIEW' || eventStatus === 'TRIAGE' ? {
+                                        content: 'Reactivate',
+                                        onAction: () => handleStatusChange('ACTIVE'),
+                                    } : {
+                                        content: 'Mark for Review',
+                                        onAction: () => handleStatusChange('UNDER_REVIEW'),
+                                    },
+                                    eventStatus === 'IGNORED' ? {
+                                        content: 'Reactivate',
+                                        onAction: () => handleStatusChange('ACTIVE'),
+                                    } : {
+                                        content: 'Ignore',
+                                        onAction: () => handleStatusChange('IGNORED'),
+                                    }
+                                ].filter(item => item)}
+                            />
+                        </Popover>
                         <Modal
-                            activator={<Button size="slim" onClick={() => setShowModal(!showModal)}>Block IPs</Button>}
+                            activator={<Button destructive size="slim" onClick={() => setShowModal(!showModal)}>Block IPs</Button>}
                             open={showModal}
                             onClose={() => setShowModal(false)}
                             primaryAction={{content: 'Save', onAction: () => setShowModal(false)}}
@@ -149,17 +879,77 @@ function SampleDetails(props) {
                                 </Text>
                             </Modal.Section>
                         </Modal>
-                        <Button size="slim" disabled>Create Jira Ticket</Button>
+                        {jiraTicketUrl ? (
+                            transform.getJiraComponent(jiraTicketUrl)
+                        ) : (
+                            <JiraTicketCreationModal
+                                activator={
+                                    <Button
+                                        size="slim"
+                                        onClick={handleJiraClick}
+                                        disabled={window.JIRA_INTEGRATED !== "true"}
+                                    >
+                                        Create Jira Ticket
+                                    </Button>
+                                }
+                                modalActive={modalActive}
+                                setModalActive={setModalActive}
+                                handleSaveAction={handleSaveAction}
+                                jiraProjectMaps={jiraProjectMaps}
+                                projId={projId}
+                                setProjId={setProjId}
+                                issueType={issueType}
+                                setIssueType={setIssueType}
+                                issueId={eventId}
+                            />
+                        )}
+                        {azureBoardsWorkItemUrl ? (
+                            <Box>
+                                <Button
+                                    size="slim"
+                                    onClick={() => window.open(azureBoardsWorkItemUrl, '_blank')}
+                                >
+                                    View Work Item
+                                </Button>
+                            </Box>
+                        ) : (
+                            <JiraTicketCreationModal
+                                activator={
+                                    <Button
+                                        size="slim"
+                                        onClick={handleAzureBoardClick}
+                                        disabled={window.AZURE_BOARDS_INTEGRATED !== "true"}
+                                    >
+                                        Create Work Item
+                                    </Button>
+                                }
+                                modalActive={boardsModalActive}
+                                setModalActive={setBoardsModalActive}
+                                handleSaveAction={handleAzureBoardSaveAction}
+                                jiraProjectMaps={projectToWorkItemsMap}
+                                projId={projectId}
+                                setProjId={setProjectId}
+                                issueType={workItemType}
+                                setIssueType={setWorkItemType}
+                                issueId={eventId}
+                                isAzureModal={true}
+                            />
+                        )}
                     </HorizontalStack>
                 </HorizontalStack>
             </Box>
         )
     }
 
+    // Only show session context tab for Agentic Security (Argus) and Endpoint Security (Atlas), not for API Security
+    const showSessionContext = isAgenticSecurityCategory() || isEndpointSecurityCategory();
+
     const tabsComponent = (
         <LayoutWithTabs
-            key={"tabs-comp"}
-            tabs={[overviewTab, timelineTab, ValuesTab, remediationTab]}
+            key={`tabs-comp-${eventId || 'default'}`}
+            tabs={ window.location.href.indexOf("guardrails") > -1
+                ? (showSessionContext ? [overviewTab, ValuesTab, sessionContextTab] : [overviewTab, ValuesTab])
+                : (showSessionContext ? [overviewTab, timelineTab, ValuesTab, sessionContextTab, remediationTab] : [overviewTab, timelineTab, ValuesTab, remediationTab])}
             currTab = {() => {}}
         />
     )

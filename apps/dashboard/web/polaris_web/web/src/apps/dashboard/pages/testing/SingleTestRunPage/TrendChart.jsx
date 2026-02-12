@@ -168,7 +168,7 @@ function TrendChart(props) {
                 count += (obj.CRITICAL + obj.HIGH + obj.MEDIUM + obj.LOW)
             })
 
-            setTotalVulnerabilites(count)
+            setTotalVulnerabilites(Math.max(count, 0))
 
             if (firstTime) {
 
@@ -202,6 +202,19 @@ function TrendChart(props) {
         fetchData(currDateRange.period, true);
         setFilterData();
     }, [])
+
+    // Refetch data when refreshTrigger prop changes
+    useEffect(() => {
+        if (props.refreshTrigger > 0) {
+            fetchData(currDateRange.period, false);
+        }
+    }, [props.refreshTrigger])
+
+    useEffect(() => {
+        if (props.totalVulnerabilities !== undefined) {
+            setTotalVulnerabilites(props.totalVulnerabilities);
+        }
+    }, [props.totalVulnerabilities])
 
 
     const defaultChartOptions = {
@@ -322,7 +335,7 @@ function TrendChart(props) {
         <LegacyCard>
             <LegacyCard.Section title={<Text fontWeight="regular" variant="bodySm" color="subdued">Vulnerabilities</Text>}>
                 <HorizontalStack align="space-between">
-                    <Text fontWeight="semibold" variant="bodyMd">Found {totalVulnerabilities} vulnerabilities in total</Text>
+                    <Text fontWeight="semibold" variant="bodyMd">Found {props?.totalVulnerabilities || totalVulnerabilities} vulnerabilities in total</Text>
                     <Button plain monochrome icon={iconSource} onClick={() => setCollapsible(!collapsible)} />
                 </HorizontalStack>
                 <Collapsible open={collapsible} transition={{duration: '500ms', timingFunction: 'ease-in-out'}}>

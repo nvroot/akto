@@ -1,17 +1,22 @@
 package com.akto.dto;
 
+import com.akto.util.Constants;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
+import org.apache.commons.collections.CollectionUtils;
 import org.bson.codecs.pojo.annotations.BsonId;
 import org.bson.codecs.pojo.annotations.BsonIgnore;
 
 import com.akto.dao.context.Context;
 import com.akto.dto.testing.CustomTestingEndpoints;
 import com.akto.dto.testing.TestingEndpoints;
+import com.akto.dto.traffic.CollectionTags;
+
 
 public class ApiCollection {
 
@@ -20,6 +25,8 @@ public class ApiCollection {
     public static final String ID = "_id";
     public static final String NAME = "name";
     String name;
+    public static final String DESCRIPTION = "description";
+    String description;
     int startTs;
     public static final String _URLS = "urls";
     public static final String START_TS = "startTs";
@@ -45,6 +52,9 @@ public class ApiCollection {
     public static final String _DEACTIVATED = "deactivated";
     boolean deactivated;
 
+    public static final String IS_OUT_OF_TESTING_SCOPE = "isOutOfTestingScope";
+    boolean isOutOfTestingScope;
+
     public static final String AUTOMATED = "automated";
     boolean automated;
 
@@ -53,6 +63,18 @@ public class ApiCollection {
 
     private boolean matchDependencyWithOtherCollections;
     public static final String MATCH_DEPENDENCY_WITH_OTHER_COLLECTIONS = "matchDependencyWithOtherCollections";
+
+    String sseCallbackUrl;
+    public static final String SSE_CALLBACK_URL = "sseCallbackUrl";
+
+    String mcpTransportType;
+    public static final String MCP_TRANSPORT_TYPE = "mcpTransportType";
+
+    String registryStatus;
+    public static final String REGISTRY_STATUS = "registryStatus";
+
+    int mcpMaliciousnessLastCheck;
+    public static final String MCP_MALICIOUSNESS_LAST_CHECK = "mcpMaliciousnessLastCheck";
 
     private static final List<String> ENV_KEYWORDS_WITH_DOT = Arrays.asList(
         "staging", "preprod", "qa", "demo", "dev", "test", "svc", 
@@ -76,13 +98,31 @@ public class ApiCollection {
 
     Type type;
     public static final String _TYPE = "type";
-    
+
+    // TODO: Remove this field once you are sure that no one is using it.
+    @Deprecated
     String userSetEnvType;
 
 	public static final String USER_ENV_TYPE = "userSetEnvType";
 
     List<TestingEndpoints> conditions;
     public static final String CONDITIONS_STRING = "conditions";
+
+    List<CollectionTags> tagsList;
+    public static final String TAGS_STRING = "tagsList";
+
+    public static final String DEFAULT_TAG_KEY = "userSetEnvType";
+
+    // Service tag for service-tag based collections
+    String serviceTag;
+    public static final String SERVICE_TAG = "serviceTag";
+
+    // List of hostnames for service-tag based collections
+    List<String> hostNames;
+    public static final String HOST_NAMES = "hostNames";
+
+    Map<String, ServiceGraphEdgeInfo> serviceGraphEdges;
+    public static final String SERVICE_GRAPH_EDGES = "serviceGraphEdges";
 
     public ApiCollection() {
     }
@@ -98,6 +138,18 @@ public class ApiCollection {
         this.sampleCollectionsDropped = sampleCollectionsDropped;
     }
 
+    public ApiCollection(int id, String name, int startTs, Set<String> urls, String hostName, int vxlanId, boolean redact, boolean sampleCollectionsDropped, String sseCallbackUrl) {
+        this.id = id;
+        this.name = name;
+        this.startTs = startTs;
+        this.urls = urls;
+        this.hostName = hostName;
+        this.vxlanId = vxlanId;
+        this.redact = redact;
+        this.sampleCollectionsDropped = sampleCollectionsDropped;
+        this.sseCallbackUrl = sseCallbackUrl;
+    }
+
     public ApiCollection(int id, String name, List<TestingEndpoints> conditions) {
         this.id = id;
         this.name = name;
@@ -105,6 +157,47 @@ public class ApiCollection {
         this.type = Type.API_GROUP;
         this.startTs = Context.now();
     }
+
+
+    public static class ServiceGraphEdgeInfo {
+        private String sourceService;
+        private String targetService;
+        private Map<String, Object> metadata;   
+
+        public ServiceGraphEdgeInfo() {
+        }
+
+        public ServiceGraphEdgeInfo(String sourceService, String targetService, Map<String, Object> metadata) {
+            this.sourceService = sourceService;
+            this.targetService = targetService;
+            this.metadata = metadata;
+        }
+
+        public String getSourceService() {
+            return sourceService;
+        }
+
+        public void setSourceService(String sourceService) {
+            this.sourceService = sourceService;
+        }
+
+        public String getTargetService() {
+            return targetService;
+        }
+
+        public void setTargetService(String targetService) {
+            this.targetService = targetService;
+        }
+
+        public Map<String, Object> getMetadata() {
+            return metadata;
+        }
+
+        public void setMetadata(Map<String, Object> metadata) {
+            this.metadata = metadata;
+        }
+    }
+
 
     public static boolean useHost = true;
 
@@ -140,25 +233,29 @@ public class ApiCollection {
         this.urls = urls;
     }
 
-    public String getEnvType(){
-        if(this.type != null && this.type == Type.API_GROUP) return null;
-        
-        if(this.userSetEnvType == null){
+    public List<CollectionTags> getEnvType(){
+        if(this.tagsList == null || this.tagsList.isEmpty()){
+            CollectionTags envTypeTag = new CollectionTags();
+            envTypeTag.setKeyName("envType");
             if (this.hostName != null) {
                 for (String keyword : ENV_KEYWORDS_WITH_DOT) {
                     if (this.hostName.contains("." + keyword)) {
-                        return "STAGING";
+                        envTypeTag.setValue("STAGING");
                     }
                 }
                 for (String keyword : ENV_KEYWORDS_WITHOUT_DOT) {
                     if (this.hostName.contains(keyword)) {
-                        return "STAGING";
+                        envTypeTag.setValue("STAGING");
                     }
+                }
+
+                if(envTypeTag.getValue() != null) {
+                    return Arrays.asList(envTypeTag);
                 }
             }
             return null;
         }else{
-            return this.userSetEnvType;
+            return this.tagsList;
         }
     }
 
@@ -204,10 +301,23 @@ public class ApiCollection {
         this.deactivated = deactivated;
     }
 
+    public boolean getIsOutOfTestingScope(){
+        return isOutOfTestingScope;
+    }
+
+    public void setIsOutOfTestingScope(boolean isOutOfTestingScope){
+        this.isOutOfTestingScope = isOutOfTestingScope;
+    }
+
     // to be used in front end
     public String getDisplayName() {
         String result;
-        if (this.hostName != null) {
+
+        // For service-tag collections, display only the service tag value (name)
+        if (this.serviceTag != null && !this.serviceTag.isEmpty()) {
+            result = this.name;
+        } else if (this.hostName != null) {
+            // For hostname-based collections, display "hostname - name"
             result = this.hostName + " - " + this.name;
         } else {
             result = this.name + "";
@@ -298,12 +408,25 @@ public class ApiCollection {
         this.sampleCollectionsDropped = sampleCollectionsDropped;
     }
 
+    @Deprecated
     public String getUserSetEnvType() {
 		return userSetEnvType;
 	}
 
+    @Deprecated
 	public void setUserSetEnvType(String userSetEnvType) {
-		this.userSetEnvType = userSetEnvType;
+        this.userSetEnvType = userSetEnvType;
+
+        if(this.tagsList == null) {
+            this.tagsList = new ArrayList<>();
+        }
+
+        if(userSetEnvType != null) {
+            String[] envList = userSetEnvType.split(",");
+            for(String env : envList) {
+                this.tagsList.add(new CollectionTags(Context.now(), DEFAULT_TAG_KEY, env.trim(), CollectionTags.TagSource.USER));
+            }
+        }
 	}
 
     public boolean getAutomated() {
@@ -332,5 +455,119 @@ public class ApiCollection {
 
     public void setRunDependencyAnalyser(boolean runDependencyAnalyser) {
         this.runDependencyAnalyser = runDependencyAnalyser;
+    }
+
+    public String getDescription() {
+        return description;
+    }
+
+    public void setDescription(String description) {
+        this.description = description;
+    }
+
+    public List<CollectionTags> getTagsList() {
+        return tagsList;
+    }
+
+    public void setTagsList(List<CollectionTags> tagsList) {
+        if(this.tagsList == null) {
+            this.tagsList = new ArrayList<>();
+        }
+
+        this.tagsList.addAll(tagsList);
+    }
+
+    public boolean isMcpCollection() {
+        if (!CollectionUtils.isEmpty(this.getTagsList())) {
+            return this.getTagsList().stream().anyMatch(t -> Constants.AKTO_MCP_SERVER_TAG.equals(t.getKeyName()));
+        }
+        return false;
+    }
+
+    public boolean isDastCollection() {
+        if (!CollectionUtils.isEmpty(this.getTagsList())) {
+            return this.getTagsList().stream().anyMatch(t -> Constants.AKTO_DAST_TAG.equals(t.getKeyName()));
+        }
+        return false;
+    }
+
+    public boolean isGenAICollection() {
+        if (!CollectionUtils.isEmpty(this.getTagsList())) {
+            return this.getTagsList().stream().anyMatch(t -> Constants.AKTO_GEN_AI_TAG.equals(t.getKeyName()));
+        }
+        return false;
+    }
+
+    public boolean isGuardRailCollection() {
+        if (!CollectionUtils.isEmpty(this.getTagsList())) {
+            return this.getTagsList().stream().anyMatch(t -> Constants.AKTO_GUARD_RAIL_TAG.equals(t.getKeyName()));
+        }
+        return false;
+    }
+
+    public boolean isEndpointCollection() {
+        if (!CollectionUtils.isEmpty(this.getTagsList())) {
+            return this.getTagsList().stream().anyMatch(t ->
+                Constants.AKTO_ENDPOINT_SOURCE_TAG.equals(t.getKeyName()) &&
+                Constants.AKTO_ENDPOINT_SOURCE_VALUE.equals(t.getValue())
+            );
+        }
+        return false;
+    }
+
+    public String getSseCallbackUrl() {
+        return sseCallbackUrl;
+    }   
+
+    public void setSseCallbackUrl(String sseCallbackUrl) {
+        this.sseCallbackUrl = sseCallbackUrl;
+    }
+
+    public String getMcpTransportType() {
+        return mcpTransportType;
+    }
+
+    public void setMcpTransportType(String mcpTransportType) {
+        this.mcpTransportType = mcpTransportType;
+    }
+
+    public String getRegistryStatus() {
+        return registryStatus;
+    }
+
+    public void setRegistryStatus(String registryStatus) {
+        this.registryStatus = registryStatus;
+    }
+
+    public int getMcpMaliciousnessLastCheck() {
+        return mcpMaliciousnessLastCheck;
+    }
+
+    public void setMcpMaliciousnessLastCheck(int mcpMaliciousnessLastCheck) {
+        this.mcpMaliciousnessLastCheck = mcpMaliciousnessLastCheck;
+    }
+
+    public String getServiceTag() {
+        return serviceTag;
+    }
+
+    public void setServiceTag(String serviceTag) {
+        this.serviceTag = serviceTag;
+    }
+
+    public List<String> getHostNames() {
+        return hostNames;
+    }
+
+    public void setHostNames(List<String> hostNames) {
+        this.hostNames = hostNames;
+    }
+
+    public Map<String, ServiceGraphEdgeInfo> getServiceGraphEdges() {
+        return serviceGraphEdges;
+    }
+
+    public void setServiceGraphEdges(Map<String, ServiceGraphEdgeInfo> serviceGraphEdges) {
+        this.serviceGraphEdges = serviceGraphEdges;
     }
 }

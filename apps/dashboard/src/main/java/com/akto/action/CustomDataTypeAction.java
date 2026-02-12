@@ -9,6 +9,7 @@ import com.akto.dto.data_types.Predicate;
 import com.akto.dto.rbac.UsersCollectionsList;
 import com.akto.dto.traffic.Key;
 import com.akto.dto.traffic.SampleData;
+import com.akto.dto.type.KeyTypes;
 import com.akto.dto.type.SingleTypeInfo;
 import com.akto.listener.InitializerListener;
 import com.akto.listener.RuntimeListener;
@@ -42,7 +43,6 @@ import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.stream.Collectors;
 
 import static com.akto.dto.type.SingleTypeInfo.fetchCustomDataTypes;
 import static com.akto.dto.type.SingleTypeInfo.subTypeMap;
@@ -160,22 +160,7 @@ public class CustomDataTypeAction extends UserAction{
         return dataTypes;
     }
 
-    private CustomDataType customDataType;;
-
-    private boolean checkConditionUpdate(CustomDataType existingCDT, CustomDataType newCDT) {
-        boolean ret = true;
-
-        ret &= Conditions.areEqual(existingCDT.getKeyConditions(), newCDT.getKeyConditions());
-        ret &= Conditions.areEqual(existingCDT.getValueConditions(), newCDT.getValueConditions());
-        
-        // check for operator change only if both key and value conditions are being used.
-        if(ret && (newCDT.getKeyConditions()!=null && newCDT.getValueConditions()!=null)){
-            ret &= existingCDT.getOperator() == newCDT.getOperator();
-        }
-
-        // false if all of them are true and true if any of them is false
-        return !ret;
-    }
+    private CustomDataType customDataType;
 
     @Override
     public String execute() {
@@ -240,13 +225,14 @@ public class CustomDataTypeAction extends UserAction{
         }
 
         SingleTypeInfo.fetchCustomDataTypes(Context.accountId.get());
+        SingleTypeInfo.SubType currentSubType = customDataType.toSubType();
 
         if(redacted){
             int accountId = Context.accountId.get();
             service.submit(() ->{
                 Context.accountId.set(accountId);
-                loggerMaker.infoAndAddToDb("Triggered a job to fix existing custom data types", LogDb.DASHBOARD);
-                handleDataTypeRedaction();
+                loggerMaker.debugAndAddToDb("Triggered a job to fix existing custom data types", LogDb.DASHBOARD);
+                handleRedactionForSubType(currentSubType, true);
             });
         }
 
@@ -254,7 +240,7 @@ public class CustomDataTypeAction extends UserAction{
             int accountId = Context.accountId.get();
             service.submit(() -> {
                 Context.accountId.set(accountId);
-                loggerMaker.infoAndAddToDb("Triggered a job to update test template based on akto data type " + name,
+                loggerMaker.debugAndAddToDb("Triggered a job to update test template based on akto data type " + name,
                         LogDb.DASHBOARD);
                 TemplateMapper templateMapper = new TemplateMapper();
                 templateMapper.createTestTemplateForCustomDataType(customDataType);
@@ -335,19 +321,20 @@ public class CustomDataTypeAction extends UserAction{
         }
 
         SingleTypeInfo.fetchCustomDataTypes(Context.accountId.get());
+        SingleTypeInfo.SubType currentSubType = subTypeMap.get(aktoDataType.getName());
         if(redacted){
             int accountId = Context.accountId.get();
             service.submit(() ->{
                 Context.accountId.set(accountId);
-                loggerMaker.infoAndAddToDb("Triggered a job to fix existing akto data types", LogDb.DASHBOARD);
-                handleDataTypeRedaction();
+                loggerMaker.debugAndAddToDb("Triggered a job to fix existing akto data types", LogDb.DASHBOARD);
+                handleRedactionForSubType(currentSubType, true);
             });
         }
 
         int accountId = Context.accountId.get();
         service.submit(() ->{
             Context.accountId.set(accountId);
-            loggerMaker.infoAndAddToDb("Triggered a job to update test template based on akto data type " + name, LogDb.DASHBOARD);
+            loggerMaker.debugAndAddToDb("Triggered a job to update test template based on akto data type " + name, LogDb.DASHBOARD);
             TemplateMapper templateMapper = new TemplateMapper();
             templateMapper.createTestTemplateForAktoDataType(aktoDataType);
         });
@@ -359,7 +346,7 @@ public class CustomDataTypeAction extends UserAction{
         try {
             int limit = 30;
             List<SampleData> sampleDataList = new ArrayList<>();
-            loggerMaker.infoAndAddToDb("triggered sample data redaction cron", LogDb.DASHBOARD);
+            loggerMaker.debugAndAddToDb("triggered sample data redaction cron", LogDb.DASHBOARD);
             String lastFetchedUrl = null;
             String lastFetchedMethod = null;
             while (true) {
@@ -369,7 +356,7 @@ public class CustomDataTypeAction extends UserAction{
                     break;
                 }
 
-                loggerMaker.infoAndAddToDb("Read " + sampleDataList.size() + " samples", LogDb.DASHBOARD);
+                loggerMaker.debugAndAddToDb("Read " + sampleDataList.size() + " samples", LogDb.DASHBOARD);
 
                 for (SampleData sd: sampleDataList) {
                     lastFetchedUrl = sd.getId().getUrl();
@@ -403,7 +390,7 @@ public class CustomDataTypeAction extends UserAction{
             }
 
         } catch (Exception e) {
-            loggerMaker.errorAndAddToDb(e, "Error in redact data sd " + e.toString(), LogDb.DASHBOARD);
+            loggerMaker.errorAndAddToDb(e, "Error in redact data sd " + e.toString());
         }
 
         try {
@@ -416,7 +403,7 @@ public class CustomDataTypeAction extends UserAction{
                 if (sampleDataList == null || sampleDataList.size() == 0) {
                     break;
                 }
-                loggerMaker.infoAndAddToDb("Read " + sampleDataList.size() + " sensitive samples", LogDb.DASHBOARD);
+                loggerMaker.debugAndAddToDb("Read " + sampleDataList.size() + " sensitive samples", LogDb.DASHBOARD);
                 skip+=limit;
                 for (SensitiveSampleData sd: sampleDataList) {
                     List<String> samples = sd.getSampleData();
@@ -447,7 +434,7 @@ public class CustomDataTypeAction extends UserAction{
                 }
             }
         } catch (Exception e) {
-            loggerMaker.errorAndAddToDb(e, "Error in redact data ssd " + e.toString(), LogDb.DASHBOARD);
+            loggerMaker.errorAndAddToDb(e, "Error in redact data ssd " + e.toString());
         }
         return Action.SUCCESS.toUpperCase();
     }
@@ -455,12 +442,11 @@ public class CustomDataTypeAction extends UserAction{
     public static void handleDataTypeRedaction(){
         try{
             fetchCustomDataTypes(Context.accountId.get());
-            loggerMaker.infoAndAddToDb("Dropping redacted data types for custom data types", LogDb.DASHBOARD);
+            loggerMaker.debugAndAddToDb("Dropping redacted data types for custom data types", LogDb.DASHBOARD);
             List<CustomDataType> customDataTypesToBeFixed = CustomDataTypeDao.instance.findAll(Filters.eq(AktoDataType.SAMPLE_DATA_FIXED, false));
-            loggerMaker.infoAndAddToDb("Found " + customDataTypesToBeFixed.size() + " custom data types to be fixed", LogDb.DASHBOARD);
 
             List<AktoDataType> aktoDataTypesToBeFixed = AktoDataTypeDao.instance.findAll(Filters.eq(AktoDataType.SAMPLE_DATA_FIXED, false));
-            loggerMaker.infoAndAddToDb("Found " + aktoDataTypesToBeFixed.size() + " akto data types to be fixed", LogDb.DASHBOARD);
+            loggerMaker.debugAndAddToDb("Found " + aktoDataTypesToBeFixed.size() + " akto data types to be fixed", LogDb.DASHBOARD);
 
             Set<SingleTypeInfo.SubType> subTypesToBeFixed = new HashSet<>();
             customDataTypesToBeFixed.forEach(cdt -> {
@@ -472,21 +458,37 @@ public class CustomDataTypeAction extends UserAction{
                 subTypesToBeFixed.add(st);
             });
             subTypesToBeFixed.forEach(st -> {
-                loggerMaker.infoAndAddToDb("Dropping redacted data types for subType:" + st.getName(), LogDb.DASHBOARD);
-                handleRedactionForSubType(st);
-                loggerMaker.infoAndAddToDb("Dropped redacted data types for subType:" + st.getName(), LogDb.DASHBOARD);
+                loggerMaker.debugAndAddToDb("Dropping redacted data types for subType:" + st.getName(), LogDb.DASHBOARD);
+                handleRedactionForSubType(st, false);
+                loggerMaker.debugAndAddToDb("Dropped redacted data types for subType:" + st.getName(), LogDb.DASHBOARD);
             });
-            loggerMaker.infoAndAddToDb("Dropped redacted data types successfully!", LogDb.DASHBOARD);
+            loggerMaker.debugAndAddToDb("Dropped redacted data types successfully!", LogDb.DASHBOARD);
         } catch (Exception e){
-            loggerMaker.errorAndAddToDb("Failed to drop redacted data types", LogDb.DASHBOARD);
+            loggerMaker.errorAndAddToDb("Failed to drop redacted data types");
         }
 
     }
 
-    private static void handleRedactionForSubType(SingleTypeInfo.SubType subType) {
-        loggerMaker.infoAndAddToDb("Dropping redacted data types for subType:" + subType.getName(), LogDb.DASHBOARD);
+    private static List<String> handleRedactionForSamples(List<String> samples) {
+        List<String> newSamples = new ArrayList<>();    
+        for(String sample : samples){
+            try {
+                String redactedSample = RedactSampleData.redactDataTypes(sample);
+                newSamples.add(redactedSample);
+            } catch (Exception e) {
+                loggerMaker.errorAndAddToDb(e, "Error in redact data types " + e.toString());
+                continue;
+            }
+        }
+        return newSamples;
+    }
+
+    private static void handleRedactionForSubType(SingleTypeInfo.SubType subType, boolean modifySampleData) {
+        loggerMaker.debugAndAddToDb("Dropping redacted data types for subType:" + subType.getName(), LogDb.DASHBOARD);
         int skip = 0;
         int limit = 100;
+        ArrayList<WriteModel<SampleData>> writesForSampleData = new ArrayList<>();
+        ArrayList<WriteModel<SensitiveSampleData>> writesForSensitiveSampleData = new ArrayList<>();
         while (true) {
             List<ApiInfo.ApiInfoKey> apiInfoKeys = SingleTypeInfoDao.instance.fetchEndpointsBySubType(subType, skip, limit);
             if(apiInfoKeys.isEmpty()){
@@ -494,23 +496,50 @@ public class CustomDataTypeAction extends UserAction{
                 break;
             }
 
-            loggerMaker.infoAndAddToDb("Found " + apiInfoKeys.size() + " apiInfoKeys for subType:" + subType.getName(), LogDb.DASHBOARD);
-            List<Bson> query = apiInfoKeys.stream().map(key -> Filters.and(
-                    Filters.eq("_id.apiCollectionId", key.getApiCollectionId()),
-                    Filters.eq("_id.url", key.getUrl()),
-                    Filters.eq("_id.method", key.getMethod())
-            )).collect(Collectors.toList());
+            loggerMaker.infoAndAddToDb("Found " + apiInfoKeys.size() + " apiInfoKeys for subType:" + subType.getName() + " and skip:" + skip, LogDb.DASHBOARD);
+            List<Bson> query = new ArrayList<>();
+            for(ApiInfo.ApiInfoKey key : apiInfoKeys){
+                Bson basicFilter = ApiInfoDao.getFilter(key);
+                query.add(basicFilter);
+            }
+            if(!modifySampleData){
+                UpdateResult updateResult = SampleDataDao.instance.updateManyNoUpsert(Filters.or(query), Updates.set("samples", Collections.emptyList()));
+                loggerMaker.debugAndAddToDb("Redacted samples in sd for subType:" + subType.getName() + ", modified:" + updateResult.getModifiedCount(), LogDb.DASHBOARD);
 
-            UpdateResult updateResult = SampleDataDao.instance.updateManyNoUpsert(Filters.or(query), Updates.set("samples", Collections.emptyList()));
-            loggerMaker.infoAndAddToDb("Redacted samples in sd for subType:" + subType.getName() + ", modified:" + updateResult.getModifiedCount(), LogDb.DASHBOARD);
+                updateResult = SensitiveSampleDataDao.instance.updateManyNoUpsert(Filters.or(query), Updates.set("sampleData", Collections.emptyList()));
+                loggerMaker.debugAndAddToDb("Redacted samples in ssd for subType:" + subType.getName() + ", modified:" + updateResult.getModifiedCount(), LogDb.DASHBOARD);
+            }else{
+                List<SampleData> sampleDataList = SampleDataDao.instance.findAll(Filters.or(query));
+                for(SampleData sampleData : sampleDataList){
+                    List<String> newSamples = handleRedactionForSamples(sampleData.getSamples());
+                    sampleData.setSamples(newSamples);
+                    Bson filter = Filters.and(Filters.eq("_id.url", sampleData.getId().getUrl()), Filters.eq("_id.method", sampleData.getId().getMethod()), Filters.eq("_id.apiCollectionId", sampleData.getId().getApiCollectionId()));
+                    writesForSampleData.add(new UpdateManyModel<>(filter, Updates.set("samples", newSamples)));
+                }
 
-            updateResult = SensitiveSampleDataDao.instance.updateManyNoUpsert(Filters.or(query), Updates.set("sampleData", Collections.emptyList()));
-            loggerMaker.infoAndAddToDb("Redacted samples in ssd for subType:" + subType.getName() + ", modified:" + updateResult.getModifiedCount(), LogDb.DASHBOARD);
-
+                List<SensitiveSampleData> sensitiveSampleDataList = SensitiveSampleDataDao.instance.findAll(Filters.or(query));
+                for(SensitiveSampleData sensitiveSampleData : sensitiveSampleDataList){
+                    List<String> newSamples = handleRedactionForSamples(sensitiveSampleData.getSampleData());
+                    sensitiveSampleData.setSampleData(newSamples);
+                    Bson filter = Filters.and(Filters.eq("_id.url", sensitiveSampleData.getId().getUrl()), Filters.eq("_id.method", sensitiveSampleData.getId().getMethod()), Filters.eq("_id.apiCollectionId", sensitiveSampleData.getId().getApiCollectionId()));
+                    writesForSensitiveSampleData.add(new UpdateManyModel<>(filter, Updates.set("sampleData", newSamples)));
+                }
+            }
+            if(!writesForSampleData.isEmpty()){
+                BulkWriteResult result =  SampleDataDao.instance.getMCollection().bulkWrite(writesForSampleData);
+                loggerMaker.infoAndAddToDb("Redaction results: matched count:" + result.getMatchedCount() + " modified count:" + result.getModifiedCount() + " samples modified in sd for subType:" + subType.getName());
+            }
+            if(!writesForSensitiveSampleData.isEmpty()){
+                
+                BulkWriteResult resultSensitive = SensitiveSampleDataDao.instance.getMCollection().bulkWrite(writesForSensitiveSampleData);
+                loggerMaker.infoAndAddToDb("Redaction results: matched count:" + resultSensitive.getMatchedCount() + " modified count:" + resultSensitive.getModifiedCount() + " sensitive samples modified in sd for subType:" + subType.getName());
+            }
+            writesForSampleData.clear();
+            writesForSensitiveSampleData.clear();
             skip += limit;
         }
         UpdateResult updateResult = SingleTypeInfoDao.instance.updateManyNoUpsert(Filters.and(Filters.eq("subType", subType.getName()), Filters.exists("values.elements", true)), Updates.set("values.elements", Collections.emptyList()));
-        loggerMaker.infoAndAddToDb("Redacted values in sti for subType:" + subType.getName() + ", modified:" + updateResult.getModifiedCount(), LogDb.DASHBOARD);
+        loggerMaker.debugAndAddToDb("Redacted values in sti for subType:" + subType.getName() + ", modified:" + updateResult.getModifiedCount(), LogDb.DASHBOARD);
 
     }
 
@@ -610,7 +639,7 @@ public class CustomDataTypeAction extends UserAction{
         int accountId = Context.accountId.get();
         service.submit(() -> {
             Context.accountId.set(accountId);
-            loggerMaker.infoAndAddToDb("Triggered a job to recalculate data types");
+            loggerMaker.debugAndAddToDb("Triggered a job to recalculate data types");
             int skip = 0;
             final int LIMIT = 100;
             final int BATCH_SIZE = 200;
@@ -634,18 +663,34 @@ public class CustomDataTypeAction extends UserAction{
                         try {
                             HttpResponseParams httpResponseParams = HttpCallParser.parseKafkaMessage(sample);
                             boolean skip1=false, skip2=false, skip3=false, skip4=false;
+                            boolean skip5 = false;
                             try {
-                                skip1 = forHeaders(httpResponseParams.getHeaders(), customDataType, apiKey);
-                                skip2 = forHeaders(httpResponseParams.requestParams.getHeaders(), customDataType, apiKey);
+                                skip1 = forHeaders(httpResponseParams.getHeaders(), customDataType, apiKey, aktoDataType);
                             } catch (Exception e) {
+                                loggerMaker.errorAndAddToDb(e, "Error in recalculating data type for response headers for " + apiKey.toString());
                             }
                             try {
-                                skip3 = forPayload(httpResponseParams.getPayload(), customDataType, apiKey);
-                                skip4 = forPayload(httpResponseParams.requestParams.getPayload(), customDataType, apiKey);
+                                skip2 = forHeaders(httpResponseParams.requestParams.getHeaders(), customDataType, apiKey, aktoDataType);
                             } catch (Exception e) {
+                                loggerMaker.errorAndAddToDb(e, "Error in recalculating data type for request headers for " + apiKey.toString());
                             }
-                            String key = skip1 + " " + skip2 + " " + skip3 + " " + skip4 + " " + sampleData.getId().toString();
-                            if ((skip1 || skip2 || skip3 || skip4) && !foundSet.contains(key)) {
+                            try {
+                                skip3 = forPayload(httpResponseParams.getPayload(), customDataType, apiKey, aktoDataType);
+                            } catch (Exception e) {
+                                loggerMaker.errorAndAddToDb(e, "Error in recalculating data type for response payload for " + apiKey.toString());
+                            }
+                            try {
+                                skip4 = forPayload(httpResponseParams.requestParams.getPayload(), customDataType, apiKey, aktoDataType);
+                            } catch (Exception e) {
+                                loggerMaker.errorAndAddToDb(e, "Error in recalculating data type for request payload for " + apiKey.toString());
+                            }
+                            try {
+                                skip5 = forQueryParams(httpResponseParams.requestParams.getURL(), customDataType, apiKey, aktoDataType);
+                            } catch (Exception e) {
+                                loggerMaker.errorAndAddToDb(e, "Error in recalculating data type for request query params for " + apiKey.toString());
+                            }
+                            String key = skip1 + " " + skip2 + " " + skip3 + " " + skip4 + " " + skip5 + " " + sampleData.getId().toString();
+                            if ((skip1 || skip2 || skip3 || skip4 || skip5) && !foundSet.contains(key)) {
                                 foundSet.add(key);
                                 responses.add(httpResponseParams);
                             }
@@ -655,11 +700,11 @@ public class CustomDataTypeAction extends UserAction{
                     }
                 }
                 if (sampleDataList != null) {
-                    loggerMaker.infoAndAddToDb("Read sampleData to recalculate data types " + sampleDataList.size());
+                    loggerMaker.debugAndAddToDb("Read sampleData to recalculate data types " + sampleDataList.size());
                 }
 
                 if (!responses.isEmpty() && responses.size() >= BATCH_SIZE) {
-                    loggerMaker.infoAndAddToDb(
+                    loggerMaker.debugAndAddToDb(
                             "Starting processing responses to recalculate data types " + responses.size());
                     SingleTypeInfo.fetchCustomDataTypes(accountId);
                     AccountHTTPCallParserAktoPolicyInfo info = RuntimeListener.accountHTTPParserMap.get(accountId);
@@ -674,14 +719,14 @@ public class CustomDataTypeAction extends UserAction{
                     responses = com.akto.runtime.Main.filterBasedOnHeaders(responses, accountSettings);
                     info.getHttpCallParser().syncFunction(responses, true, false, accountSettings);
                     info.getHttpCallParser().apiCatalogSync.buildFromDB(false, false);
-                    loggerMaker.infoAndAddToDb("Processed responses to recalculate data types " + responses.size());
+                    loggerMaker.debugAndAddToDb("Processed responses to recalculate data types " + responses.size());
                     responses.clear();
                 }
 
             }while(sampleDataList!=null && !sampleDataList.isEmpty());
 
             if (!responses.isEmpty()) {
-                loggerMaker.infoAndAddToDb("Starting processing responses to recalculate data types " + responses.size());
+                loggerMaker.debugAndAddToDb("Starting processing responses to recalculate data types " + responses.size());
                 SingleTypeInfo.fetchCustomDataTypes(accountId);
                 AccountHTTPCallParserAktoPolicyInfo info = RuntimeListener.accountHTTPParserMap.get(accountId);
                 if (info == null) {
@@ -695,9 +740,9 @@ public class CustomDataTypeAction extends UserAction{
                 responses = com.akto.runtime.Main.filterBasedOnHeaders(responses, accountSettings);
                 info.getHttpCallParser().syncFunction(responses, true, false, accountSettings);
                 info.getHttpCallParser().apiCatalogSync.buildFromDB(false, false);
-                loggerMaker.infoAndAddToDb("Processed responses to recalculate data types " + responses.size());
+                loggerMaker.debugAndAddToDb("Processed responses to recalculate data types " + responses.size());
             }
-            loggerMaker.infoAndAddToDb("Finished a job to recalculate data types");
+            loggerMaker.debugAndAddToDb("Finished a job to recalculate data types");
         });
 
         return SUCCESS.toUpperCase();
@@ -726,11 +771,12 @@ public class CustomDataTypeAction extends UserAction{
                 Key apiKey = sampleData.getId();
                 try {
                     HttpResponseParams httpResponseParams = HttpCallParser.parseKafkaMessage(sample);
-                    boolean skip1 = ( customDataType.isSensitiveAlways() || customDataType.getSensitivePosition().contains(SingleTypeInfo.Position.RESPONSE_HEADER) ) ? forHeaders(httpResponseParams.getHeaders(), customDataType, apiKey) : false;
-                    boolean skip2 = ( customDataType.isSensitiveAlways() || customDataType.getSensitivePosition().contains(SingleTypeInfo.Position.REQUEST_HEADER) ) ? forHeaders(httpResponseParams.requestParams.getHeaders(), customDataType, apiKey) : false;
-                    boolean skip3 = ( customDataType.isSensitiveAlways() || customDataType.getSensitivePosition().contains(SingleTypeInfo.Position.RESPONSE_PAYLOAD) ) ? forPayload(httpResponseParams.getPayload(), customDataType, apiKey) : false;
-                    boolean skip4 = ( customDataType.isSensitiveAlways() || customDataType.getSensitivePosition().contains(SingleTypeInfo.Position.REQUEST_PAYLOAD) ) ? forPayload(httpResponseParams.requestParams.getPayload(), customDataType, apiKey) : false;
-                    skip = skip1 || skip2 || skip3 || skip4;
+                    boolean skip1 = ( customDataType.isSensitiveAlways() || customDataType.getSensitivePosition().contains(SingleTypeInfo.Position.RESPONSE_HEADER) ) ? forHeaders(httpResponseParams.getHeaders(), customDataType, apiKey, aktoDataType) : false;
+                    boolean skip2 = ( customDataType.isSensitiveAlways() || customDataType.getSensitivePosition().contains(SingleTypeInfo.Position.REQUEST_HEADER) ) ? forHeaders(httpResponseParams.requestParams.getHeaders(), customDataType, apiKey, aktoDataType) : false;
+                    boolean skip3 = ( customDataType.isSensitiveAlways() || customDataType.getSensitivePosition().contains(SingleTypeInfo.Position.RESPONSE_PAYLOAD) ) ? forPayload(httpResponseParams.getPayload(), customDataType, apiKey, aktoDataType) : false;
+                    boolean skip4 = ( customDataType.isSensitiveAlways() || customDataType.getSensitivePosition().contains(SingleTypeInfo.Position.REQUEST_PAYLOAD) ) ? forPayload(httpResponseParams.requestParams.getPayload(), customDataType, apiKey, aktoDataType) : false;
+                    boolean skip5 = ( customDataType.isSensitiveAlways() || customDataType.getSensitivePosition().contains(SingleTypeInfo.Position.REQUEST_PAYLOAD) ) ? forQueryParams(httpResponseParams.requestParams.getURL(), customDataType, apiKey, aktoDataType) : false;
+                    skip = skip1 || skip2 || skip3 || skip4 || skip5;
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
@@ -744,12 +790,18 @@ public class CustomDataTypeAction extends UserAction{
         return SUCCESS.toUpperCase();
     }
 
-    public boolean forHeaders(Map<String, List<String>> headers, CustomDataType customDataType, Key apiKey) {
+    public boolean forHeaders(Map<String, List<String>> headers, CustomDataType customDataType, Key apiKey, AktoDataType aktoDataType) {
         boolean matchFound = false;
         for (String headerName: headers.keySet()) {
             List<String> headerValues = headers.get(headerName);
             for (String value: headerValues) {
-                boolean result = customDataType.validate(value,headerName);
+                boolean result = false;
+                if(aktoDataType != null){
+                    SingleTypeInfo.SubType subType = aktoDataType.toSubType();
+                    result = KeyTypes.matchesSubType(subType, headerName, value) != null;
+                }else{
+                    result = customDataType.validate(value,headerName);
+                }
                 if (result) {
                     matchFound = true;
                     CustomSubTypeMatch customSubTypeMatch = new CustomSubTypeMatch(
@@ -758,6 +810,45 @@ public class CustomDataTypeAction extends UserAction{
                     this.customSubTypeMatches.add(customSubTypeMatch);
                 }
             }
+        }
+        return matchFound;
+    }
+
+    public boolean forQueryParams(String url, CustomDataType customDataType, Key apiKey, AktoDataType aktoDataType) {
+        if (url == null || url.isEmpty()) {
+            return false;
+        }
+        boolean matchFound = false;
+        try {
+            String[] split = url.split("\\?");
+            if (split.length == 2) {
+                String[] urlParams = split[1].split("&");
+                for (String urlParam : urlParams) {
+                    String[] param = urlParam.split("=", 2);
+                    if (param.length == 2) {
+                        String paramName = param[0];
+                        String paramValue = param[1];
+
+                        boolean result = false;
+                        if(aktoDataType != null){
+                            SingleTypeInfo.SubType subType = aktoDataType.toSubType();
+                            result = KeyTypes.matchesSubType(subType, paramName, paramValue) != null;
+                        }else{
+                            result = customDataType.validate(paramValue, paramName);
+                        }
+
+                        if (result) {
+                            matchFound = true;
+                            CustomSubTypeMatch customSubTypeMatch = new CustomSubTypeMatch(
+                                    apiKey.getApiCollectionId(), apiKey.url, apiKey.method.name(), paramName, paramValue
+                            );
+                            this.customSubTypeMatches.add(customSubTypeMatch);
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            loggerMaker.errorAndAddToDb(e, "Error processing query params in custom data type check");
         }
         return matchFound;
     }
@@ -772,35 +863,42 @@ public class CustomDataTypeAction extends UserAction{
         }
     }
 
-    public static void extractAllValuesFromPayload(JsonNode node, String key, CustomDataType customDataType, List<MatchResult> matches) {
+    public static void extractAllValuesFromPayload(JsonNode node, String key, CustomDataType customDataType, List<MatchResult> matches, AktoDataType aktoDataType) {
         if (node == null) return;
         if (node.isValueNode()) {
             Object value = mapper.convertValue(node, Object.class);
-            boolean result = customDataType.validate(value, key);
+            if(value == null) return;
+            boolean result = false;
+            if(aktoDataType != null){
+                SingleTypeInfo.SubType subType = aktoDataType.toSubType();
+                result = KeyTypes.matchesSubType(subType, key, value) != null;
+            }else{
+                result = customDataType.validate(value, key);
+            }
             if (result) matches.add(new MatchResult(key, value));
         } else if (node.isArray()) {
             ArrayNode arrayNode = (ArrayNode) node;
             for(int i = 0; i < arrayNode.size(); i++) {
                 JsonNode arrayElement = arrayNode.get(i);
-                extractAllValuesFromPayload(arrayElement, null, customDataType, matches);
+                extractAllValuesFromPayload(arrayElement, null, customDataType, matches, aktoDataType);
             }
         } else {
             Iterator<String> fieldNames = node.fieldNames();
             while(fieldNames.hasNext()) {
                 String fieldName = fieldNames.next();
                 JsonNode fieldValue = node.get(fieldName);
-                extractAllValuesFromPayload(fieldValue, fieldName, customDataType, matches);
+                extractAllValuesFromPayload(fieldValue, fieldName, customDataType, matches, aktoDataType);
             }
         }
 
     }
 
-    public boolean forPayload(String payload, CustomDataType customDataType, Key apiKey) throws IOException {
+    public boolean forPayload(String payload, CustomDataType customDataType, Key apiKey, AktoDataType aktoDataType) throws IOException {
         JsonParser jp = factory.createParser(payload);
         JsonNode node = mapper.readTree(jp);
 
         List<MatchResult> matchResults = new ArrayList<>();
-        extractAllValuesFromPayload(node,null, customDataType, matchResults);
+        extractAllValuesFromPayload(node,null, customDataType, matchResults, aktoDataType);
 
         for (MatchResult matchResult: matchResults) {
             CustomSubTypeMatch customSubTypeMatch = new CustomSubTypeMatch(
@@ -986,7 +1084,7 @@ public class CustomDataTypeAction extends UserAction{
         ArrayList<WriteModel<SingleTypeInfo>> bulkUpdatesForSingleTypeInfo = new ArrayList<>();
         for(SingleTypeInfo.ParamId paramId: idsToDelete) {
             String paramStr = "PII cleaner - deleting: " + paramId.getApiCollectionId() + ": " + paramId.getMethod() + " " + paramId.getUrl() + " > " + paramId.getParam();
-            loggerMaker.infoAndAddToDb(paramStr, LogDb.DASHBOARD);
+            loggerMaker.debugAndAddToDb(paramStr, LogDb.DASHBOARD);
 
             List<Bson> filters = new ArrayList<>();
             filters.add(Filters.eq("url", paramId.getUrl()));
@@ -1003,7 +1101,7 @@ public class CustomDataTypeAction extends UserAction{
             BulkWriteResult bwr =
                     SingleTypeInfoDao.instance.getMCollection().bulkWrite(bulkUpdatesForSingleTypeInfo, new BulkWriteOptions().ordered(false));
 
-            loggerMaker.infoAndAddToDb("PII cleaner - deleted " + bwr.getDeletedCount() + " from STI", LogDb.DASHBOARD);
+            loggerMaker.debugAndAddToDb("PII cleaner - deleted " + bwr.getDeletedCount() + " from STI", LogDb.DASHBOARD);
         }
 
     }
@@ -1013,7 +1111,7 @@ public class CustomDataTypeAction extends UserAction{
         for(SingleTypeInfo.ParamId paramId: idsToDelete) {
             String paramStr = "PII cleaner - invalidating: " + paramId.getApiCollectionId() + ": " + paramId.getMethod() + " " + paramId.getUrl() + " > " + paramId.getParam();
             String url = "dashboard/observe/inventory/"+paramId.getApiCollectionId()+"/"+Base64.getEncoder().encodeToString((paramId.getUrl() + " " + paramId.getMethod()).getBytes());
-            loggerMaker.infoAndAddToDb(paramStr + url, LogDb.DASHBOARD);
+            loggerMaker.debugAndAddToDb(paramStr + url, LogDb.DASHBOARD);
 
             List<Bson> filters = new ArrayList<>();
             filters.add(Filters.eq("_id.url", paramId.getUrl()));
@@ -1030,7 +1128,7 @@ public class CustomDataTypeAction extends UserAction{
             BulkWriteResult bwr =
                     SensitiveSampleDataDao.instance.getMCollection().bulkWrite(bulkSensitiveInvalidateUpdates, new BulkWriteOptions().ordered(false));
 
-            loggerMaker.infoAndAddToDb("PII cleaner - modified " + bwr.getModifiedCount() + " from SSD", LogDb.DASHBOARD);
+            loggerMaker.debugAndAddToDb("PII cleaner - modified " + bwr.getModifiedCount() + " from SSD", LogDb.DASHBOARD);
         }
 
     }
@@ -1079,7 +1177,7 @@ public class CustomDataTypeAction extends UserAction{
             cursor = SensitiveSampleDataDao.instance.getMCollection().find(Filters.and(filterSsdQ, collectionFilter)).projection(Projections.exclude(SensitiveSampleData.SAMPLE_DATA)).skip(currMarker).limit(BATCH_SIZE).cursor();
             currMarker += BATCH_SIZE;
             dataPoints = 0;
-            loggerMaker.infoAndAddToDb("processing batch: " + currMarker, LogDb.DASHBOARD);
+            loggerMaker.debugAndAddToDb("processing batch: " + currMarker, LogDb.DASHBOARD);
             while(cursor.hasNext()) {
                 dataPoints++;
                 SensitiveSampleData ssd = cursor.next();
@@ -1107,7 +1205,7 @@ public class CustomDataTypeAction extends UserAction{
 
                 if (!isPresentInMost(ssdId.getParam(), commonPayloads, ssdId.getResponseCode()==-1)) {
                     idsToDelete.add(ssdId);
-                    loggerMaker.infoAndAddToDb("deleting: " + ssdId, LogDb.DASHBOARD);
+                    loggerMaker.debugAndAddToDb("deleting: " + ssdId, LogDb.DASHBOARD);
                 }
             }
 

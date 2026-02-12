@@ -4,11 +4,14 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 import com.akto.dao.test_editor.TestEditorEnums;
 import com.akto.dao.test_editor.TestEditorEnums.ContextOperator;
+import com.akto.dao.test_editor.TestEditorEnums.DataOperands;
 import com.akto.dao.test_editor.TestEditorEnums.OperandTypes;
 import com.akto.dao.test_editor.TestEditorEnums.PredicateOperator;
+import com.akto.dao.test_editor.TestEditorEnums.TermOperands;
 import com.akto.dto.test_editor.ConfigParserResult;
 import com.akto.dto.test_editor.ConfigParserValidationResult;
 import com.akto.dto.test_editor.FilterNode;
@@ -20,6 +23,7 @@ public class ConfigParser {
     private List<String> allowedPredParentNodes = Arrays.asList("pred", "collection", "payload", "term");
     private List<String> allowedTermParentNodes = Arrays.asList("pred");
     private List<String> allowedCollectionParentNodes = Arrays.asList("pred", "term");
+    private static final String CIDR_REGEX = "^([0-1]?\\d{1,2}|2[0-4]\\d|25[0-5])\\.([0-1]?\\d{1,2}|2[0-4]\\d|25[0-5])\\.([0-1]?\\d{1,2}|2[0-4]\\d|25[0-5])\\.([0-1]?\\d{1,2}|2[0-4]\\d|25[0-5])/([0-2]?\\d|3[0-2])$";
 
     public ConfigParser() {
     }
@@ -158,9 +162,9 @@ public class ConfigParser {
         // 1. terminal data nodes should have String/Arraylist<String> values
 
         if (curNodeType.equals(OperandTypes.Data.toString().toLowerCase())) {
-            if (!(isString(values) || (isListOfString(values)))){
+            if (!(isString(values) || isListOfString(values) || values instanceof Double || isListOfDouble(values))){
                 configParserValidationResult.setIsValid(false);
-                configParserValidationResult.setErrMsg("terminal data nodes should have String/Arraylist<String> values");
+                configParserValidationResult.setErrMsg("terminal data nodes should have String/Arraylist<String> or Double/ArrayList<Double> values");
                 return configParserValidationResult;
             }
         }
@@ -202,7 +206,7 @@ public class ConfigParser {
         }
 
         // skip parent node checks if it was the first node
-        if (parentNodeType == "_ETHER_") {
+        if (parentNodeType.equals("_ETHER_")) {
             return configParserValidationResult;
         }
 
@@ -245,8 +249,32 @@ public class ConfigParser {
             return configParserValidationResult;
         }
         
+        // 11. CIDR operands can only be applied to IP properties.
+        if (isIpOperand(curNode.getOperand())) {
+            
+            if (!isIpProperty(concernedProperty)) {
+                configParserValidationResult.setIsValid(false);
+                configParserValidationResult.setErrMsg("IP CIDR rules can only be applied to source_ip and destination_ip");
+                return configParserValidationResult;
+            }
+
+            if (!isListOfValidIPv4CIDR(values)) {
+                configParserValidationResult.setIsValid(false);
+                configParserValidationResult.setErrMsg("Values must be a list of valid IPv4 CIDR notations");
+                return configParserValidationResult;
+            }
+        
+        }
+
+        if (isIpProperty(concernedProperty) && !isIpOperand(curNode.getOperand())) {
+            configParserValidationResult.setIsValid(false);
+            configParserValidationResult.setErrMsg("IP properties can only be used with CIDR operands");
+            return configParserValidationResult;
+        }
+
+
         return configParserValidationResult;
-    }
+}
 
     public Boolean isString(Object value) {
         return value instanceof String;
@@ -264,6 +292,66 @@ public class ConfigParser {
             }
         }
 
+        return true;
+    }
+
+    
+    private Boolean isIpOperand(String operand) {
+        return DataOperands.CONTAINS_EITHER_CIDR.toString().equals(operand)
+                || DataOperands.NOT_CONTAINS_CIDR.toString().equals(operand);
+    }
+
+    private Boolean isIpProperty(String concernedProperty) {
+        return TermOperands.SOURCE_IP.toString().equals(concernedProperty)
+                || TermOperands.DESTINATION_IP.toString().equals(concernedProperty);
+    }
+
+    public Boolean isListOfValidIPv4CIDR(Object value) {
+        if (!(value instanceof List)) {
+            return false;
+        }
+    
+        List<Object> listValues = (List<Object>) value;
+        Pattern cidrPattern = Pattern.compile(ConfigParser.CIDR_REGEX);
+    
+        for (Object item : listValues) {
+            if (!(item instanceof String) || !cidrPattern.matcher((String) item).matches()) {
+                return false;
+            }
+        }
+    
+        return true;
+    }
+
+    public static boolean isFilterNodeValidForAgenticTest(FilterNode filterNode) {
+        List<FilterNode> childNodes = filterNode.getChildNodes();
+        for (FilterNode childNode : childNodes) {
+            if (childNode.getOperand().equalsIgnoreCase(TermOperands.TEST_TYPE.toString())) {
+                Object values = childNode.getValues();
+                if (values instanceof List) {
+                    List<Map<String,String>> listValues = (List<Map<String,String>>) values;
+                    if (listValues.size() != 1) {
+                        return false;
+                    }
+                    Map<String,String> typeValueObj = listValues.get(0);
+                    String typeValue = typeValueObj.get("eq");
+                    return typeValue.equalsIgnoreCase("AGENTIC");
+                }
+            }
+        }
+        return false;
+    }
+    
+    public Boolean isListOfDouble(Object value) {
+        if(!(value instanceof List)) {
+            return false;
+        }
+        List<Object> listValues = (List<Object>) value;
+        for (Object v : listValues) {
+            if (!(v instanceof Double)) {
+                return false;
+            }
+        }
         return true;
     }
 

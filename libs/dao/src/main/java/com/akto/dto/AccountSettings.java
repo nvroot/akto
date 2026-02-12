@@ -15,6 +15,9 @@ import com.akto.dto.type.CollectionReplaceDetails;
 import com.akto.util.ConnectionInfo;
 import com.akto.util.LastCronRunInfo;
 
+import lombok.Getter;
+import lombok.Setter;
+
 import com.akto.dto.test_editor.TestLibrary;
 
 public class AccountSettings {
@@ -122,6 +125,40 @@ public class AccountSettings {
 
     public static final String COMPLIANCE_INFOS_UPDATED_TS = "complianceInfosUpdatedTs";
     private int complianceInfosUpdatedTs;
+
+    public static final String THREAT_POLICIES = "threatPolicies";
+    private List<TestLibrary> threatPolicies;
+
+    public static final String ALLOW_MERGING_ON_VERSIONS = "allowMergingOnVersions";
+    @Getter
+    @Setter
+    private boolean allowMergingOnVersions;
+
+    public static final String JIRA_TICKET_URL_MAP = "jiraTicketUrlMap";
+    private Map<String, String> jiraTicketUrlMap = new HashMap<>();
+
+    @Getter
+    @Setter
+    private int lastUpdatedTestingIssuesCount;
+    public static final String LAST_UPDATED_TESTING_ISSUES_COUNT = "lastUpdatedTestingIssuesCount";
+
+    public static final String COMPULSORY_DESCRIPTION = "compulsoryDescription";
+    private Map<String, Boolean> compulsoryDescription = new HashMap<>();
+
+    @Getter
+    @Setter
+    private String awsAccountIdsForApiGatewayLogging;
+    public static final String AWS_ACCOUNT_IDS_FOR_API_GATEWAY_LOGGING = "awsAccountIdsForApiGatewayLogging";
+
+    @Getter
+    @Setter
+    private boolean blockLogs;
+    public static final String BLOCK_LOGS = "blockLogs";
+
+    @Getter
+    @Setter
+    private List<String> filterLogPolicy;
+    public static final String FILTER_LOG_POLICY = "filterLogPolicy";
 
     public AccountSettings() {
     }
@@ -466,5 +503,29 @@ public class AccountSettings {
 
     public void setComplianceInfosUpdatedTs(int complianceInfosUpdatedTs) {
         this.complianceInfosUpdatedTs = complianceInfosUpdatedTs;
+    }
+
+    public List<TestLibrary> getThreatPolicies() {
+        return this.threatPolicies;
+    }
+
+    public void setThreatPolicies(List<TestLibrary>  threatPolicies) {
+        this.threatPolicies = threatPolicies;
+    }
+
+    public Map<String, String> getJiraTicketUrlMap() {
+        return this.jiraTicketUrlMap;
+    }
+
+    public void setJiraTicketUrlMap(Map<String, String> jiraTicketUrlMap) {
+        this.jiraTicketUrlMap = jiraTicketUrlMap;
+    }
+
+    public Map<String, Boolean> getCompulsoryDescription() {
+        return this.compulsoryDescription;
+    }
+
+    public void setCompulsoryDescription(Map<String, Boolean> compulsoryDescription) {
+        this.compulsoryDescription = compulsoryDescription;
     }
 }

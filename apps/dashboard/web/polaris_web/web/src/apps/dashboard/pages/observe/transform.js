@@ -1,5 +1,5 @@
 import func from "@/util/func";
-import { Badge, Box, HorizontalStack, Icon, Text, Tooltip } from "@shopify/polaris";
+import { Badge, Box, Button, HorizontalStack, Icon, Text, Tooltip } from "@shopify/polaris";
 import PersistStore from "../../../main/PersistStore";
 import TooltipText from "../../components/shared/TooltipText";
 import StyledEndpoint from "./api_collections/component/StyledEndpoint"
@@ -7,6 +7,8 @@ import CopyEndpoint from "./api_collections/component/CopyEndpoint"
 import { SearchMinor, InfoMinor, LockMinor, ClockMinor, PasskeyMinor, LinkMinor, DynamicSourceMinor, GlobeMinor, LocationsMinor, PriceLookupMinor, ArrowUpMinor, ArrowDownMinor } from "@shopify/polaris-icons"
 import api from "./api";
 import GetPrettifyEndpoint from "./GetPrettifyEndpoint";
+import ShowListInBadge from "../../components/shared/ShowListInBadge";
+import { CATEGORY_ENDPOINT_SECURITY, getDashboardCategory } from "../../../main/labelHelper";
 
 const standardHeaders = [
     'accept', 'accept-ch', 'accept-ch-lifetime', 'accept-charset', 'accept-encoding', 'accept-language', 'accept-patch', 'accept-post', 'accept-ranges', 'access-control-allow-credentials', 'access-control-allow-headers', 'access-control-allow-methods', 'access-control-allow-origin', 'access-control-expose-headers', 'access-control-max-age', 'access-control-request-headers', 'access-control-request-method', 'age', 'allow', 'alt-svc', 'alt-used', 'authorization',
@@ -117,6 +119,14 @@ const apiDetailsHeaders = [
         text: 'Non-Sensitive Params',
         value: 'nonSensitiveTags',
         itemOrder: 4,
+    },
+    {
+        text: 'Description',
+        itemOrder: 2,
+        value: 'description',
+        alignVertical: "bottom",
+        component: (data) => (<Button plain onClick={data?.action} textAlign="left">Add description</Button>),
+        action: () => {}
     }
 ]
 
@@ -227,6 +237,19 @@ const transform = {
                 x["highlightValue"] = val
                 return x
             })
+            if(c.includes("x-akto-decode")){
+                highlightPaths.push({
+                    "highlightValue": {
+                        "value": "x-akto-decode",
+                        "wholeRow": true,
+                        "className": "akto-decoded",
+                        "highlight": true,
+                    },
+                    "responseCode": -1,
+                    "header": 'x-akto-decode',
+                    "param": "x-akto-decode",
+                })
+            }
             paths.push({message:c, highlightPaths:highlightPaths}); 
         }
         return paths;
@@ -255,13 +278,13 @@ const transform = {
         }
     },
     fillSensitiveParams: (sensitiveParams, apiCollection) => {
-        sensitiveParams = sensitiveParams.reduce((z,e) => {
+        sensitiveParams = sensitiveParams && sensitiveParams.reduce((z,e) => {
             let key = [e.apiCollectionId + "-" + e.url + "-" + e.method]
             z[key] = z[key] || new Set()
             z[key].add(e.subType || {"name": "CUSTOM"})
             return z
         },{})
-        Object.entries(sensitiveParams).forEach(p => {
+        sensitiveParams && Object.entries(sensitiveParams).forEach(p => {
             let apiCollectionIndex = apiCollection.findIndex(e => {
                 return (e.apiCollectionId + "-" + e.url + "-" + e.method) === p[0]
             })
@@ -336,6 +359,7 @@ const transform = {
             }
             
         })
+        uniqueNonSensitive = uniqueNonSensitive.reverse();
         let finalArr = [...uniqueNonSensitive]
         if(samples.size > 0){
             finalArr = [...sensitiveSamples, ...finalArr]
@@ -383,6 +407,17 @@ const transform = {
         }
     },
 
+    getColorForStatus(key){
+        switch(key.toUpperCase()){
+            case "ACTIVE": return "#EF864C"
+            case "UNDER_REVIEW": return "#F6C564"
+            case "IGNORED": return "#6FD1A6"
+            case "TOTAL": return "#7F56D9"
+            default:
+                return "#6FD1A6";
+        }
+    },
+
     getStatus(riskScore){
         if(riskScore >= 4.5){
             return "critical"
@@ -404,14 +439,41 @@ const transform = {
                 {
                     Object.keys(sortedSeverityInfo).length > 0 ? Object.keys(sortedSeverityInfo).map((key,index)=>{
                         return(
-                            <div className={`badge-wrapper-${key}`}>
-                                <Badge size="small" key={index}>{sortedSeverityInfo[key].toString()}</Badge>
+                            <div key={`severity-badge-${key}-${index}`} className={`badge-wrapper-${key}`}>
+                                <Badge size="small">{Math.max(sortedSeverityInfo[key], 0).toString()}</Badge>
                             </div>
                         )
                     }):
                     <Text fontWeight="regular" variant="bodyMd" color="subdued">-</Text>
                 }
             </HorizontalStack>
+        )
+    },
+
+    getCollectionTypeList(envType, maxItems, wrap){
+        if(envType == null || envType.length === 0){
+            return <></>
+        }
+
+        // Sort tags to prioritize 'privatecloud.agoda.com/service' first
+        const sortedEnvType = [...envType].sort((a, b) => {
+            const aKey = a.split('=')[0];
+            const bKey = b.split('=')[0];
+
+            if (aKey === 'privatecloud.agoda.com/service') return -1;
+            if (bKey === 'privatecloud.agoda.com/service') return 1;
+            return 0;
+        });
+
+        return (
+            <ShowListInBadge
+                itemsArr={sortedEnvType}
+                maxItems={maxItems}
+                status={"info"}
+                useTooltip={true}
+                wrap={wrap}
+                allowFullWidth={true}
+            />
         )
     },
 
@@ -432,9 +494,20 @@ const transform = {
             <Box maxWidth="200px">
                 <HorizontalStack gap={1} wrap={false}>
                     {sensitiveTags.map((item,index)=>{
+                        const iconSource = func.getSensitiveIcons(item);
+                        const isSvgString = typeof iconSource === 'string' && iconSource.trim().startsWith('<svg');
+
                         return (index < 4 ? <Tooltip dismissOnMouseOut content={item} key={index + item}><Box>
                             <div className={deactivated ? "icon-deactivated" : ""}>
-                                <Icon color={deactivated ? "" : "subdued"} source={func.getSensitiveIcons(item)} />
+                                {isSvgString ? (
+                                    <img
+                                        src={`data:image/svg+xml;base64,${btoa(iconSource)}`}
+                                        alt={item}
+                                        style={{display: 'flex', alignItems: 'center', width: '20px', height: '20px'}}
+                                    />
+                                ) : (
+                                    <Icon color={deactivated ? "" : "subdued"} source={iconSource} />
+                                )}
                             </div>
                         </Box></Tooltip> : null)
                     })}
@@ -444,25 +517,90 @@ const transform = {
         )
     },
 
-    prettifyCollectionsData(newData, isLoading){
+    prettifyCollectionsData(newData, isLoading, selectedTab, filterType){
+        const category = getDashboardCategory();
+        const isEndpointSecurity = category === CATEGORY_ENDPOINT_SECURITY;
+
         const prettifyData = newData.map((c)=>{
+            // Check if we're in the untracked tab
+            const isUntrackedTab = selectedTab === 'untracked';
+
+            // Calculate coverage - for untracked tab, leave it blank
             let calcCoverage = '0%';
-            if(c.urlsCount > 0){
-                if(c.urlsCount < c.testedEndpoints){
-                    calcCoverage= '100%'
-                }else{
-                    calcCoverage =  Math.ceil((c.testedEndpoints * 100)/c.urlsCount) + '%'
+            if(isUntrackedTab){
+                calcCoverage = '';
+            } else if(!c.isOutOfTestingScope){
+                if(c.urlsCount > 0){
+                    if(c.urlsCount < c.testedEndpoints){
+                        calcCoverage= '100%'
+                    }else{
+                        calcCoverage =  Math.ceil((c.testedEndpoints * 100)/c.urlsCount) + '%'
+                    }
                 }
+            }else{
+                calcCoverage = 'N/A'
             }
+
             const loadingComp = <Text color="subdued" variant="bodyMd">...</Text>
+
+            // Split collection name for Endpoint Security category
+            let splitApiCollectionName = c.displayName;
+            let endpointId = '';
+            let sourceId = '';
+            let serviceName = '';
+            if (isEndpointSecurity) {
+                const splitResult = this.splitCollectionNameForEndpointSecurity(c.displayName);
+                splitApiCollectionName = splitResult.apiCollectionName;
+                endpointId = splitResult.endpointId;
+                sourceId = splitResult.sourceId;
+                serviceName = splitResult.serviceName;
+            }
+
+            // Determine display text based on filter type
+            // - browser-llm: show sourceId (<2>)
+            // - ai-agent: show serviceName (<3>)
+            // - mcp-server: show sourceId (<2>)
+            // - default: show splitApiCollectionName (<2>.<3>)
+            let displayText = isEndpointSecurity ? splitApiCollectionName : c.displayName;
+            if (filterType === 'browser-llm' || filterType === 'mcp-server') {
+                displayText = sourceId || c.sourceId || splitApiCollectionName;
+            } else if (filterType === 'ai-agent') {
+                displayText = serviceName || c.serviceName || splitApiCollectionName;
+            }
+
+            // Create displayNameComp - always create new one when filterType is provided to show correct text
+            const displayNameComp = (filterType ? null : c.displayNameComp) || (
+                <HorizontalStack gap="2" align="start">
+                    <Box maxWidth="30vw"><Text truncate fontWeight="medium">{displayText}</Text></Box>
+                    {c.registryStatus === "available" && <Badge>Registry</Badge>}
+                </HorizontalStack>
+            );
+
+            // Create descriptionComp if it doesn't exist
+            const descriptionComp = c.descriptionComp || (<Box maxWidth="350px"><Text>{c.description}</Text></Box>);
+
+            // Create outOfTestingScopeComp if it doesn't exist
+            const outOfTestingScopeComp = c.outOfTestingScopeComp || (c.isOutOfTestingScope ? (<Text>Yes</Text>) : (<Text>No</Text>));
+
+            // Risk score component - for untracked tab, show blank
+            const riskScoreComp = isUntrackedTab
+                ? <Text></Text>
+                : (isLoading ? loadingComp : <Badge key={c?.id} status={this.getStatus(c.riskScore)} size="small">{c.riskScore}</Badge>);
+
             return{
                 ...c,
                 id: c.id,
                 nextUrl: '/dashboard/observe/inventory/' + c.id,
                 displayName: c.displayName,
-                displayNameComp: c.displayNameComp,
-                riskScoreComp: isLoading ? loadingComp : <Badge key={c?.id} status={this.getStatus(c.riskScore)} size="small">{c.riskScore}</Badge>,
-                coverage: isLoading ? '...' : calcCoverage,
+                splitApiCollectionName: splitApiCollectionName,
+                endpointId: endpointId,
+                sourceId: sourceId || c.sourceId,
+                serviceName: serviceName || c.serviceName,
+                displayNameComp: displayNameComp,
+                descriptionComp: descriptionComp,
+                outOfTestingScopeComp: outOfTestingScopeComp,
+                riskScoreComp: riskScoreComp,
+                coverage: calcCoverage,
                 issuesArr: isLoading ? loadingComp : this.getIssuesList(c.severityInfo),
                 issuesArrVal: this.getIssuesListText(c.severityInfo),
                 sensitiveSubTypes: isLoading ? loadingComp : this.prettifySubtypes(c.sensitiveInRespTypes, c.deactivated),
@@ -470,7 +608,7 @@ const transform = {
                 riskScore: c.riskScore,
                 deactivatedRiskScore: c.deactivated ? (c.riskScore - 10 ) : c.riskScore,
                 activatedRiskScore: -1 * (c.deactivated ? c.riskScore : (c.riskScore - 10 )),
-                envTypeComp: isLoading ? loadingComp : c.envType ? <Badge size="small" status="info">{c.envType}</Badge> : null,
+                envTypeComp: isLoading ? loadingComp : this.getCollectionTypeList(c.envType, 1, false),
                 sensitiveSubTypesVal: c?.sensitiveInRespTypes.join(" ") ||  "-"
             }
         })
@@ -479,10 +617,52 @@ const transform = {
         return prettifyData
     },
 
+    prettifyUntrackedCollectionsData(newData){
+        const prettifyData = newData.map((c)=>{
+            // Create displayNameComp if it doesn't exist (for lazy-loaded items)
+            const displayNameComp = c.displayNameComp || (
+                <HorizontalStack gap="2" align="start">
+                    <Box maxWidth="30vw"><Text truncate fontWeight="medium">{c.displayName}</Text></Box>
+                    {c.registryStatus === "available" && <Badge>Registry</Badge>}
+                </HorizontalStack>
+            );
+
+            // For untracked tab, show empty/blank values for fields that don't apply
+            return{
+                ...c,
+                id: c.id,
+                name: c.name,
+                nextUrl: null,
+                displayName: c.displayName,
+                displayNameComp: displayNameComp,
+                descriptionComp: <Text></Text>, // Empty for untracked
+                outOfTestingScopeComp: <Text></Text>, // Empty for untracked
+                riskScoreComp: <Text></Text>, // Empty for untracked
+                coverage: '', // Empty for untracked
+                issuesArr: <Text></Text>, // Empty for untracked - no issues data
+                issuesArrVal: '', // Empty for untracked
+                sensitiveSubTypes: <Text></Text>, // Empty for untracked - no sensitive data
+                sensitiveSubTypesVal: '', // Empty for untracked
+                lastTraffic: '', // Empty for untracked
+                discovered: '', // Empty for untracked
+                riskScore: 0,
+                deactivatedRiskScore: 0,
+                activatedRiskScore: 0,
+                envTypeComp: <Text></Text>, // Empty for untracked
+                testedEndpoints: 0,
+                collapsibleRow: c.collapsibleRow,
+                collapsibleRowText: c.collapsibleRowText,
+            }
+        })
+
+        return prettifyData
+    },
+
     getSummaryData(collectionsData){
         let totalUrl = 0;
         let sensitiveInRes = 0;
         let totalTested = 0 ;
+        let totalAllowedForTesting = 0;
 
         collectionsData?.forEach((c) =>{
             if (c.hasOwnProperty('type') && c.type === 'API_GROUP') {
@@ -492,22 +672,43 @@ const transform = {
                 return
             }
             totalUrl += c.urlsCount ;
-            totalTested += c.testedEndpoints;
+            if(!c.isOutOfTestingScope){
+                totalTested += c.testedEndpoints;
+                totalAllowedForTesting += c.urlsCount;
+                return
+            }
         })
 
         return {
-            totalEndpoints:totalUrl , totalTestedEndpoints: totalTested, totalSensitiveEndpoints: sensitiveInRes
+            totalEndpoints:totalUrl , totalTestedEndpoints: totalTested, totalSensitiveEndpoints: sensitiveInRes, totalAllowedForTesting: totalAllowedForTesting,
         }
     },
 
     getTruncatedUrl(url){
+        const category = getDashboardCategory();
+        let parsedURL = url;
+        let pathUrl = url;
         try {
-            const parsedURL = new URL(url)
-            const pathUrl = parsedURL.pathname.replace(/%7B/g, '{').replace(/%7D/g, '}');
-            return pathUrl
+            parsedURL = new URL(url)
+            pathUrl = parsedURL.pathname.replace(/%7B/g, '{').replace(/%7D/g, '}');
         } catch (error) {
-            return url
+            
         }
+        if(category.includes("MCP") || category.includes("Agentic") || category === CATEGORY_ENDPOINT_SECURITY){
+            try {
+                const [path, tail = ""] = pathUrl.split(/(?=[?#])/); // keep ? or # in tail
+                const newPath = path
+                  .replace(/^.*?\/calls?(?:\/|$)/i, "/")       // keep only what's after /call or /calls
+                  .replace(/\/{2,}/g, "/");                  // collapse slashes
+                return (newPath.endsWith("/") && newPath !== "/")
+                  ? newPath.slice(0, -1) + tail
+                  : newPath + tail;
+            } catch (error) {
+                return url;
+            }
+            
+        }
+        return pathUrl;
     },
 
     getHostName(url){
@@ -520,6 +721,9 @@ const transform = {
     },
 
     isNewEndpoint(lastSeen){
+        if(lastSeen === undefined || lastSeen <= 0){
+            return false
+        }
         let lastMonthEpoch = func.timeNow() - (30 * 24 * 60 * 60);
         return lastSeen > lastMonthEpoch
     },
@@ -527,6 +731,12 @@ const transform = {
     prettifyEndpointsData(inventoryData){
         const hostNameMap = PersistStore.getState().hostNameMap
         const prettifyData = inventoryData.map((url) => {
+            let lastTestedText = "";
+            if(url?.lastTested === undefined || url?.lastTested <= 0){
+                lastTestedText = "Never"
+            }else{
+                lastTestedText = func.prettifyEpoch(url?.lastTested)
+            }
             return{
                 ...url,
                 last_seen: url.last_seen,
@@ -539,6 +749,10 @@ const transform = {
                 isNew: this.isNewEndpoint(url.lastSeenTs),
                 sensitiveDataTags: url?.sensitiveTags.join(" "),
                 codeAnalysisEndpoint: false,
+                issuesComp: url.severityObj? this.getIssuesList(url.severityObj):'-',
+                severity: url.severityObj? Object.keys(url.severityObj):[],
+                description: url.description,
+                lastTestedComp: <Text variant="bodyMd" fontWeight={this.isNewEndpoint(url?.lastTested) ? "regular" : "semibold"} color={this.isNewEndpoint(url?.lastTested) ? "" : "subdued"}>{lastTestedText}</Text>,
             }
         })
 
@@ -681,6 +895,56 @@ const transform = {
             
             setDelta(data[data.length-1] - data[0])
         }
+    },
+
+    getUntrackedApisCollapsibleRow: (untrackedApis) => {
+        return (
+            <tr style={{padding: '0px !important', borderTop: '1px solid #dde0e4'}}>
+                <td colSpan={8} style={{padding: '0px !important', width: '100%'}}>
+                    {untrackedApis.map((api, index) => {
+                        const borderStyle = index < (untrackedApis.length - 1) ? {borderBlockEndWidth: 1} : {}
+                        return (
+                            <Box
+                                padding={"2"}
+                                paddingInlineStart={"4"}
+                                key={index}
+                                borderColor="border-subdued"
+                                {...borderStyle}
+                                width="100%"
+                            >
+                                <div style={{ display: "flex", alignItems: "center", width: "100%" }}>
+                                    <HorizontalStack gap="2" align="start" blockAlign="center">
+                                        <GetPrettifyEndpoint
+                                            method={api.method}
+                                            url={api.url}
+                                            isNew={false}
+                                        />
+                                    </HorizontalStack>
+                                    <div style={{ marginLeft: "auto" }}>
+                                        <Text color="subdued" fontWeight="semibold">
+                                            {api.urlType || "STATIC"}
+                                        </Text>
+                                    </div>
+                                </div>
+                            </Box>
+                        )
+                    })}
+                </td>
+            </tr>
+        )
+    },
+
+    splitCollectionNameForEndpointSecurity: (collectionName) => {
+        if (!collectionName || !collectionName.includes('.')) {
+            return { apiCollectionName: collectionName || '', endpointId: '', sourceId: '', serviceName: collectionName || '' };
+        }
+        const parts = collectionName.split('.');
+        return {
+            endpointId: parts[0],                    // <1>
+            sourceId: parts[1] || '',                // <2>
+            serviceName: parts.slice(2).join('.'),   // <3> (can contain dots)
+            apiCollectionName: parts.slice(1).join('.') // <2>.<3> for backward compatibility
+        };
     }
 }
 

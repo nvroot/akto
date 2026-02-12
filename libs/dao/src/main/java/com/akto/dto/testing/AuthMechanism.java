@@ -1,8 +1,11 @@
 package com.akto.dto.testing;
 
+import com.akto.dao.context.Context;
 import com.akto.dto.OriginalHttpRequest;
 import com.akto.dto.RecordedLoginFlowInput;
+import com.akto.dto.test_editor.ExecutorSingleOperationResp;
 
+import com.akto.util.enums.LoginFlowEnums;
 import org.bson.codecs.pojo.annotations.BsonIgnore;
 import org.bson.types.ObjectId;
 
@@ -14,6 +17,14 @@ public class AuthMechanism {
     private ObjectId id;
     public static final String OBJECT_ID = "objectId";
     private List<AuthParam> authParams;
+
+    @BsonIgnore
+    private List<AuthParam> authParamsCached;
+
+    @BsonIgnore
+    private int cacheExpiryEpoch;
+    @BsonIgnore
+    private int errorCacheExpiryEpoch;
 
     private String type;
 
@@ -36,12 +47,33 @@ public class AuthMechanism {
         this.apiCollectionIds = apiCollectionIds;
     }
 
-    public boolean addAuthToRequest(OriginalHttpRequest request) {
-        for (AuthParam authParamPair : authParams) {
-            boolean result = authParamPair.addAuthTokens(request);
-            if (!result) return false;
+    public ExecutorSingleOperationResp addAuthToRequest(OriginalHttpRequest request, boolean useCached) {
+
+        boolean shouldUseCachedAuth = useCached && !isCacheExpired();
+        List<AuthParam> authParamsToUse = shouldUseCachedAuth ? authParamsCached: authParams;
+        
+        String messageKeysPresent = "";
+        String messageKeysAbsent = "";
+        boolean modifiedAtLeastOne = false;
+
+        for (AuthParam authParam1: authParamsToUse) {
+            if(authParam1.authTokenPresent(request)){
+                authParam1.addAuthTokens(request);
+                messageKeysPresent += authParam1.getKey()+", ";
+                modifiedAtLeastOne = true;
+            } else {
+                messageKeysAbsent += authParam1.getKey()+", ";
+            }
         }
-        return true;
+
+        return new ExecutorSingleOperationResp(modifiedAtLeastOne, "keys present=[" + messageKeysPresent +"], absent=["+ messageKeysAbsent + "]");
+
+    }
+
+    public boolean isCacheExpired() {
+        // take max of cacheExpiryEpoch and errorCacheExpiryEpoch, to check what is the latest expiry time
+        int maxExpiryEpoch = Math.max(cacheExpiryEpoch, errorCacheExpiryEpoch);
+        return maxExpiryEpoch <= (Context.now() + 30);
     }
 
     public boolean removeAuthFromRequest(OriginalHttpRequest request) {
@@ -58,6 +90,14 @@ public class AuthMechanism {
             result = result || authParamPair.authTokenPresent(request);
         }
         return result;
+    }
+
+    public List<AuthParam> getAuthParamsFromAuthMechanism() {
+        boolean eligibleForCachedToken = LoginFlowEnums.AuthMechanismTypes.LOGIN_REQUEST.toString().equalsIgnoreCase(getType()) || LoginFlowEnums.AuthMechanismTypes.SAMPLE_DATA.toString().equalsIgnoreCase(getType());
+        boolean shouldUseCachedAuth = eligibleForCachedToken && !isCacheExpired();
+        List<AuthParam> authParamsToUse = shouldUseCachedAuth ? authParamsCached : authParams;
+
+        return authParamsToUse;
     }
 
     public ObjectId getId() {
@@ -84,14 +124,21 @@ public class AuthMechanism {
         return authParams;
     }
 
-    public AuthParam fetchFirstAuthParam() {
-        return authParams.get(0);
-    }
-
-    //public AuthParam set
-
     public void setAuthParams(List<AuthParam> authParams) {
         this.authParams = authParams;
+    }
+
+    public void updateAuthParamsCached(List<AuthParam> authParamsCached) {
+        this.authParamsCached = authParamsCached;
+    }
+
+    public void updateCacheExpiryEpoch(int cacheExpiryEpoch) {
+        this.cacheExpiryEpoch = cacheExpiryEpoch;
+        this.errorCacheExpiryEpoch = cacheExpiryEpoch; // assuming error cache expiry is same as cache expiry
+    }
+
+    public void updateErrorCacheExpiryEpoch(int errorCacheExpiryEpoch) {
+        this.errorCacheExpiryEpoch = errorCacheExpiryEpoch;
     }
 
     public ArrayList<RequestData> getRequestData() {

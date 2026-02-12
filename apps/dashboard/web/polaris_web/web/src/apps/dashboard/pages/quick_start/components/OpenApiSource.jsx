@@ -1,7 +1,6 @@
-import { HorizontalStack, Text, Badge, VerticalStack, ButtonGroup, Button, Modal, DescriptionList, RadioButton, Icon, Tooltip } from "@shopify/polaris";
-import { CancelMajor } from "@shopify/polaris-icons"
+import { Text, Modal, DescriptionList, RadioButton, Icon, Tooltip } from "@shopify/polaris";
 import { useState } from "react";
-import FileUpload from "../../../components/shared/FileUpload";
+import FileUploadCard from "../../../components/shared/FileUploadCard";
 import api from "../api";
 import func from "@/util/func";
 import SpinnerCentered from "../../../components/progress/SpinnerCentered"
@@ -83,12 +82,12 @@ function OpenApiSource() {
     let successModalContent = (
         <div>
             <Text>Total APIs in the uploaded file: {uploadObj.totalCount}</Text>
-            <Text>Total apis parsed correctly by Akto: {uploadObj.correctlyParsedApis}</Text>
+            <Text>Total APIs (including all response codes) parsed correctly by Akto: {uploadObj.correctlyParsedApis}</Text>
             {
                 uploadObj.apisWithErrorsAndCannotBeImported + uploadObj.apisWithErrorsAndParsed > 0 &&
                 <div>
-                    <Text>Total apis parsed with errors by Akto (can still be imported): {uploadObj.apisWithErrorsAndParsed}</Text>
-                    <Text>Total apis which cannot be imported: {uploadObj.apisWithErrorsAndCannotBeImported}</Text>
+                    <Text>Total APIs parsed with errors by Akto (can still be imported): {uploadObj.apisWithErrorsAndParsed}</Text>
+                    <Text>Total APIs which cannot be imported: {uploadObj.apisWithErrorsAndCannotBeImported}</Text>
                     { uploadObj.apisWithErrorsAndParsed > 0 && 
                     <div>
                         <div style={{display: "flex"}}>
@@ -141,38 +140,20 @@ function OpenApiSource() {
         </div>
     )
     return (
-        <div className='card-items'>
-            <Text variant='bodyMd'>
-                Use openAPI/swagger file to add API endpoints. If you like what you see, we highly recommend using AWS or GCP traffic mirroring to get real user data for a smooth, automated and minimum false positive experience.
-            </Text>
-
-            <HorizontalStack gap="2" >
-                {files ?
-                    <Badge size='medium' status='success'>
-                        {files.name}
-                        <Button icon={CancelMajor} plain onClick={() => setFiles(null)} />
-                    </Badge>
-                    : null}
-                File: <FileUpload
-                    fileType="file"
-                    acceptString=".json , .yaml, .yml"
-                    setSelectedFile={setFilesCheck}
-                    allowMultiple={false}
-                    allowedSize={5*1024*1024} />
-            </HorizontalStack>
-
-            <VerticalStack gap="2">
-                <ButtonGroup>
-                    <Button 
-                    onClick={uploadFile} 
-                    primary 
-                    disabled={files === null} 
-                    loading={loading}>
-                        Upload
-                    </Button>
-                    <Button onClick={goToDocs}>Go to docs</Button>
-                </ButtonGroup>
-            </VerticalStack>
+        <>
+            <FileUploadCard
+                description="Use openAPI/swagger file to add API endpoints. If you like what you see, we highly recommend using AWS or GCP traffic mirroring to get real user data for a smooth, automated and minimum false positive experience."
+                files={files}
+                onFileRemove={() => setFiles(null)}
+                acceptString=".json , .yaml, .yml"
+                setSelectedFile={setFilesCheck}
+                allowMultiple={false}
+                allowedSize={5*1024*1024}
+                onUpload={uploadFile}
+                loading={loading}
+                onSecondaryAction={goToDocs}
+                secondaryActionLabel="Go to docs"
+            />
             <Modal
                 open={showImportDetailsModal}
                 onClose={() => {closeModal()}}
@@ -199,7 +180,7 @@ function OpenApiSource() {
                 }
                 </Modal.Section>
             </Modal>
-        </div>
+        </>
     )
 }
 

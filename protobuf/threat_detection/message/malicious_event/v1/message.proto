@@ -3,6 +3,7 @@ syntax = "proto3";
 package threat_detection.message.malicious_event.v1;
 
 import "threat_detection/message/malicious_event/event_type/v1/event_type.proto";
+import "threat_detection/message/sample_request/v1/message.proto";
 
 option java_outer_classname = "MaliciousEventProto";
 option java_package = "threat_detection.message.malicious_event.v1";
@@ -21,6 +22,13 @@ message MaliciousEventMessage {
   string sub_category = 11;
   string severity = 12;
   string type = 13;
+  threat_detection.message.sample_request.v1.Metadata metadata = 14;
+  bool successful_exploit = 15;
+  string label = 16;  // Common values: "threat", "guardrail"
+  string host = 17;   // Host header from the request
+  string status = 18;
+  string context_source = 19;  // Context source: API, MCP, GEN_AI, AGENTIC, DAST, ENDPOINT
+  string session_id = 20;  // Session identifier for tracking user sessions
 }
 
 message MaliciousEventKafkaEnvelope {

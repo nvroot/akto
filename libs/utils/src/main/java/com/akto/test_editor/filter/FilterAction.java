@@ -1,5 +1,6 @@
 package com.akto.test_editor.filter;
 
+import com.akto.util.HttpRequestResponseUtils;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -11,14 +12,17 @@ import com.akto.dao.testing.AccessMatrixUrlToRolesDao;
 import com.akto.dto.OriginalHttpResponse;
 import com.akto.dto.testing.AccessMatrixUrlToRole;
 
+import com.alibaba.fastjson2.JSONObject;
 import org.bson.conversions.Bson;
 
+import com.akto.dao.ApiCollectionsDao;
 import com.akto.dao.ApiInfoDao;
 import com.akto.dao.SampleDataDao;
 import com.akto.dao.SingleTypeInfoDao;
 import com.akto.dao.test_editor.TestEditorEnums;
 import com.akto.dao.test_editor.TestEditorEnums.BodyOperator;
 import com.akto.dao.test_editor.TestEditorEnums.CollectionOperands;
+import com.akto.dto.ApiCollection;
 import com.akto.dto.ApiInfo;
 import com.akto.dto.HttpResponseParams;
 import com.akto.dto.OriginalHttpRequest;
@@ -33,6 +37,8 @@ import com.akto.dto.type.RequestTemplate;
 import com.akto.dto.type.SingleTypeInfo;
 import com.akto.dto.type.URLMethods;
 import com.akto.dto.type.URLTemplate;
+import com.akto.mcp.McpRequestResponseUtils;
+import com.akto.test_editor.TestingUtilsSingleton;
 import com.akto.test_editor.Utils;
 import com.akto.test_editor.execution.VariableResolver;
 import com.akto.test_editor.filter.data_operands_impl.*;
@@ -52,6 +58,8 @@ public final class FilterAction {
     public final Map<String, DataOperandsImpl> filters = new HashMap<String, DataOperandsImpl>() {{
         put("contains_all", new ContainsAllFilter());
         put("contains_either", new ContainsEitherFilter());
+        put("contains_either_cidr", new ContainsEitherIpFilter());
+        put("not_contains_cidr", new NotContainsIpFilter());
         put("not_contains", new NotContainsFilter());
         put("regex", new RegexFilter());
         put("eq", new EqFilter());
@@ -68,6 +76,11 @@ public final class FilterAction {
         put("datatype", new DatatypeFilter());
         put("ssrf_url_hit", new SsrfUrlHitFilter());
         put("belongs_to_collections", new ApiCollectionFilter());
+        put("magic_validate", new MagicValidateFilter());
+        put("not_magic_validate", new NotMagicValidateFilter());
+        put("nlp_classification", new NlpClassificationFilter());  // TODO: MCP - Demo placeholder
+        put("category", new CategoryFilter());  // TODO: MCP - Demo placeholder
+        put("confidence", new ConfidenceFilter());
     }};
 
     public FilterAction() { }
@@ -115,6 +128,17 @@ public final class FilterAction {
                 return applyFilterOnQueryParams(filterActionRequest);
             case "response_code":
                 return applyFilterOnResponseCode(filterActionRequest);
+            case "source_ip":
+                return applyFilterOnSourceIps(filterActionRequest);
+            case "destination_ip":
+                return applyFilterOnDestinationIps(filterActionRequest);
+            case "country_code":
+                return applyFilterOnCountryCode(filterActionRequest);
+            case "nlp_classification":
+                return applyFilterOnNlpClassification(filterActionRequest);
+            case "test_type":
+                return applyFilterOnTestType(filterActionRequest);
+                
             default:
                 return new DataOperandsFilterResponse(false, null, null, null);
 
@@ -172,7 +196,13 @@ public final class FilterAction {
 
     public DataOperandsFilterResponse applyFilterOnUrl(FilterActionRequest filterActionRequest) {
 
+        // handle for mcp requests
         String url = filterActionRequest.getApiInfoKey().getUrl();
+        if(url.contains("tools") && TestingUtilsSingleton.getInstance().isMcpRequest(filterActionRequest.getApiInfoKey(), filterActionRequest.getRawApi())) {
+            if(url.contains("call")) {
+                url = url.split("call/")[1];
+            }
+        }
 
         DataOperandFilterRequest dataOperandFilterRequest = new DataOperandFilterRequest(url, filterActionRequest.getQuerySet(), filterActionRequest.getOperand());
         ValidationResult res = invokeFilter(dataOperandFilterRequest);
@@ -181,6 +211,11 @@ public final class FilterAction {
 
     public void extractUrl(FilterActionRequest filterActionRequest, Map<String, Object> varMap) {
         String url = filterActionRequest.getRawApi().getRequest().getUrl();
+        if(url.contains("tools") && TestingUtilsSingleton.getInstance().isMcpRequest(filterActionRequest.getApiInfoKey(), filterActionRequest.getRawApi())) {
+            if(url.contains("call")) {
+                url = url.split("call/")[1];
+            }
+        }
         List<String> querySet = (List<String>) filterActionRequest.getQuerySet();
         if (varMap.containsKey(querySet.get(0)) && varMap.get(querySet.get(0)) != null) {
             return;
@@ -191,8 +226,24 @@ public final class FilterAction {
     public DataOperandsFilterResponse applyFilterOnMethod(FilterActionRequest filterActionRequest) {
 
         String method = filterActionRequest.getApiInfoKey().getMethod().toString();
+        // handle of mcp requests
+        String url = filterActionRequest.getApiInfoKey().getUrl();
+        boolean isMcpRequest = McpRequestResponseUtils.isMcpRequest(filterActionRequest.getRawApi());
+        if(url.contains("tools") && isMcpRequest) {
+            if(url.contains("call")) {
+                method = TestingUtilsSingleton.getInstance().getMcpRequestMethod(filterActionRequest.getApiInfoKey(), filterActionRequest.getRawApi());
+            }else{
+                method = "POST";
+            }
+        }
         DataOperandFilterRequest dataOperandFilterRequest = new DataOperandFilterRequest(method, filterActionRequest.getQuerySet(), filterActionRequest.getOperand());
         ValidationResult res = invokeFilter(dataOperandFilterRequest);
+        if(!res.getIsValid() && isMcpRequest) {
+            // fallback to POST for all the mcp tests because they have filter of method eq: POST
+            method = "POST";
+            dataOperandFilterRequest = new DataOperandFilterRequest(method, filterActionRequest.getQuerySet(), filterActionRequest.getOperand());
+            res = invokeFilter(dataOperandFilterRequest);
+        }
         return new DataOperandsFilterResponse(res.getIsValid(), null, null, null, res.getValidationReason());
     }
 
@@ -253,6 +304,67 @@ public final class FilterAction {
         varMap.put(querySet.get(0), respCode);
     }
 
+    public DataOperandsFilterResponse applyFilterOnSourceIps(FilterActionRequest filterActionRequest) {
+
+        RawApi rawApi = filterActionRequest.fetchRawApiBasedOnContext();
+        if (rawApi == null || rawApi.getRequest() == null) {
+            return new DataOperandsFilterResponse(false, null, null, null);
+        }
+
+        String sourceIp = rawApi.getRequest().getSourceIp();
+        DataOperandFilterRequest dataOperandFilterRequest = new DataOperandFilterRequest(sourceIp, filterActionRequest.getQuerySet(), filterActionRequest.getOperand());
+        ValidationResult res = invokeFilter(dataOperandFilterRequest);
+        return new DataOperandsFilterResponse(res.getIsValid(), null, null, null, res.getValidationReason());
+    }
+
+    public DataOperandsFilterResponse applyFilterOnDestinationIps(FilterActionRequest filterActionRequest) {
+
+        RawApi rawApi = filterActionRequest.fetchRawApiBasedOnContext();
+        if (rawApi == null || rawApi.getRequest() == null) {
+            return new DataOperandsFilterResponse(false, null, null, null);
+        }
+
+        String destinationIp = rawApi.getRequest().getDestinationIp();
+        DataOperandFilterRequest dataOperandFilterRequest = new DataOperandFilterRequest(destinationIp, filterActionRequest.getQuerySet(), filterActionRequest.getOperand());
+        ValidationResult res = invokeFilter(dataOperandFilterRequest);
+        return new DataOperandsFilterResponse(res.getIsValid(), null, null, null, res.getValidationReason());
+    }
+
+    public DataOperandsFilterResponse applyFilterOnCountryCode(FilterActionRequest filterActionRequest) {
+
+        RawApi rawApi = filterActionRequest.fetchRawApiBasedOnContext();
+        if (rawApi == null || rawApi.getRequest() == null) {
+            return new DataOperandsFilterResponse(false, null, null, null);
+        }
+
+        String countryCode = rawApi.getRawApiMetadata().getCountryCode();
+        if (countryCode.isEmpty()){
+            return new DataOperandsFilterResponse(false, null, null, null);
+        }
+
+        DataOperandFilterRequest dataOperandFilterRequest = new DataOperandFilterRequest(countryCode, filterActionRequest.getQuerySet(), filterActionRequest.getOperand());
+        ValidationResult res = invokeFilter(dataOperandFilterRequest);
+        return new DataOperandsFilterResponse(res.getIsValid(), null, null, null, res.getValidationReason());
+    }
+
+    public DataOperandsFilterResponse applyFilterOnTestType(FilterActionRequest filterActionRequest) {
+        RawApi rawApi = filterActionRequest.fetchRawApiBasedOnContext();
+        if (rawApi == null || rawApi.getRequest() == null) {
+            return new DataOperandsFilterResponse(false, null, null, null);
+        }
+        int apiCollectionId = filterActionRequest.getApiInfoKey().getApiCollectionId();
+        ApiCollection apiCollection = ApiCollectionsDao.instance.getMetaForId(apiCollectionId);
+        if (apiCollection == null) {
+            return new DataOperandsFilterResponse(false, null, null, null, "API collection not found");
+        }
+        if (apiCollection.isGenAICollection() ||
+                apiCollection.isMcpCollection() ||
+                apiCollection.isGuardRailCollection()) {
+            return new DataOperandsFilterResponse(true, null, null, null);
+        }
+        return new DataOperandsFilterResponse(false, null, null, null, "The request is not an Agentic request");
+    }
+
     public DataOperandsFilterResponse applyFilterOnRequestPayload(FilterActionRequest filterActionRequest) {
 
         RawApi rawApi = filterActionRequest.fetchRawApiBasedOnContext();
@@ -265,6 +377,13 @@ public final class FilterAction {
         }
 
         String reqBody = rawApi.getRequest().getBody();
+
+        // Strip BOM before processing for regex filters to avoid false positives with SOAP payloads
+        if (filterActionRequest.getOperand() != null &&
+            filterActionRequest.getOperand().equals(TestEditorEnums.DataOperands.REGEX.toString())) {
+            reqBody = Utils.stripBOM(reqBody);
+        }
+        
         return applyFilterOnPayload(filterActionRequest, reqBody);
     }
 
@@ -280,6 +399,30 @@ public final class FilterAction {
         }
 
         String reqBody = response.getBody();
+        ApiInfo.ApiInfoKey apiInfoKey = filterActionRequest.getApiInfoKey();
+        if(TestingUtilsSingleton.getInstance().isMcpRequest(apiInfoKey, rawApi)) {
+
+            String contentType = HttpRequestResponseUtils.getHeaderValue(response.getHeaders(), "content-type");
+            String tempReqBody = McpRequestResponseUtils.parseResponse(contentType, reqBody);
+           
+            if(tempReqBody.contains("error") && filterActionRequest.isValidationContext()) {
+                // check if error comes out in parsing, call to LLM when context is not filter
+
+                MagicValidateFilter magicValidateFilter = new MagicValidateFilter();
+                DataOperandFilterRequest dataOperandFilterRequest = new DataOperandFilterRequest(reqBody, filterActionRequest.getQuerySet(), "magic_validate");
+                ValidationResult validationResult = magicValidateFilter.isValid(dataOperandFilterRequest);
+                return new DataOperandsFilterResponse(validationResult.getIsValid(), null, null, null, validationResult.getValidationReason());
+            
+            }else{
+                reqBody = tempReqBody;
+            }
+        }
+        // Strip BOM before processing for regex filters to avoid false positives with SOAP payloads
+        if (filterActionRequest.getOperand() != null &&
+            filterActionRequest.getOperand().equals(TestEditorEnums.DataOperands.REGEX.toString())) {
+            reqBody = Utils.stripBOM(reqBody);
+        }
+
         return applyFilterOnPayload(filterActionRequest, reqBody);
     }
 
@@ -287,17 +430,18 @@ public final class FilterAction {
 
         String origPayload = payload;
         BasicDBObject payloadObj = new BasicDBObject();
-        try {
-            payload = Utils.jsonifyIfArray(payload);
-            payloadObj =  BasicDBObject.parse(payload);
-        } catch(Exception e) {
-            // add log
+        if (!filterActionRequest.getOperand().equals(TestEditorEnums.DataOperands.REGEX.toString()) || (filterActionRequest.getCollectionProperty() != null && filterActionRequest.getCollectionProperty().equals(TestEditorEnums.CollectionOperands.FOR_ONE.toString())) ) {
+            try {
+                payload = Utils.jsonifyIfArray(payload);
+                payloadObj = BasicDBObject.parse(payload);
+            } catch(Exception e) {
+                // add log
+            }
         }
 
         Set<String> matchingKeySet = new HashSet<>();
         List<String> matchingKeys = new ArrayList<>();
         List<String> matchingValueKeySet = new ArrayList<>();
-        Boolean res = false;
 
         boolean allShouldSatisfy = false;
         boolean doAllSatisfy = true;
@@ -360,12 +504,20 @@ public final class FilterAction {
                 double percentageMatch = Utils.structureMatch(filterActionRequest.getRawApi(), filterActionRequest.fetchRawApiBasedOnContext());
                 val = (int) percentageMatch;
             }
+
+            if (filterActionRequest.getOperand().equalsIgnoreCase(TestEditorEnums.DataOperands.REGEX_EXTRACT.toString())) {
+                List<String> querySet = Utils.convertObjectToListOfString(filterActionRequest.getQuerySet());
+                List<String> matches = new ArrayList<>();
+                for (String query : querySet) {
+                    matches.addAll(Utils.extractRegex(payload, query));
+                }
+                if (matches.size() > 0) {
+                    return new DataOperandsFilterResponse(true, matches, null, null);
+                }
+                return new DataOperandsFilterResponse(false, null, null, null);
+            }
             
             DataOperandFilterRequest dataOperandFilterRequest = new DataOperandFilterRequest(val, filterActionRequest.getQuerySet(), filterActionRequest.getOperand());
-            ValidationResult validationResult = invokeFilter(dataOperandFilterRequest);
-            return new DataOperandsFilterResponse(validationResult.getIsValid(), null, null, null, validationResult.getValidationReason());
-        } else if (filterActionRequest.getConcernedSubProperty() == null) {
-            DataOperandFilterRequest dataOperandFilterRequest = new DataOperandFilterRequest(payload, filterActionRequest.getQuerySet(), filterActionRequest.getOperand());
             ValidationResult validationResult = invokeFilter(dataOperandFilterRequest);
             return new DataOperandsFilterResponse(validationResult.getIsValid(), null, null, null, validationResult.getValidationReason());
         }
@@ -388,6 +540,11 @@ public final class FilterAction {
             return;
         }
         String payload = rawApi.getResponse().getBody();
+        ApiInfo.ApiInfoKey apiInfoKey = filterActionRequest.getApiInfoKey();
+        if(TestingUtilsSingleton.getInstance().isMcpRequest(apiInfoKey, rawApi)) {
+            String contentType = rawApi.getResponse().getHeaders().get("content-type").get(0);
+            payload = McpRequestResponseUtils.parseResponse(contentType, payload);
+        }
         extractPayload(filterActionRequest, varMap, payload, extractMultiple);
     }
 
@@ -402,6 +559,11 @@ public final class FilterAction {
             reqObj =  BasicDBObject.parse(payload);
         } catch(Exception e) {
             // add log
+        }
+
+        // for mcp requests, remove mcp related params like name, id which is in root level, jsonrpc, etc.
+        if (TestingUtilsSingleton.getInstance().isMcpRequest(filterActionRequest.getApiInfoKey(), filterActionRequest.getRawApi())) {
+            reqObj = McpRequestResponseUtils.removeMcpRelatedParams(reqObj);
         }
 
         if (filterActionRequest.getConcernedSubProperty() != null && filterActionRequest.getConcernedSubProperty().toLowerCase().equals("key")) {
@@ -434,6 +596,19 @@ public final class FilterAction {
                 }
                 double percentageMatch = compareWithOriginalResponse(payload, sampleRawApi.getResponse().getBody(), new HashMap<>());
                 val = (int) percentageMatch;
+            }
+            /*
+             * no concerned sub property means that
+             * the operation was directly applied on the payload
+             * so we need to extract the matching key set, if any
+             */
+        } else if (filterActionRequest.getConcernedSubProperty() == null &&
+                filterActionRequest.getMatchingKeySet() != null &&
+                filterActionRequest.getMatchingKeySet().size() > 0) {
+            if (extractMultiple) {
+                val = filterActionRequest.getMatchingKeySet();
+            } else {
+                val = filterActionRequest.getMatchingKeySet().get(0);
             }
         } else {
             val = payload;
@@ -672,6 +847,8 @@ public final class FilterAction {
             result = queryParamObj.size() > 0;
         }
 
+        Object val = queryParams;
+
         if (filterActionRequest.getConcernedSubProperty() != null && filterActionRequest.getConcernedSubProperty().toLowerCase().equals("key")) {
             for (String key: queryParamObj.keySet()) {
                 DataOperandFilterRequest dataOperandFilterRequest = new DataOperandFilterRequest(key, filterActionRequest.getQuerySet(), filterActionRequest.getOperand());
@@ -711,12 +888,19 @@ public final class FilterAction {
             //     matchingValueKeySet = new ArrayList<>();
             // }
             return new DataOperandsFilterResponse(result, matchingValueKeySet, null, null, validationErrorString.toString());
-        } else {
-            DataOperandFilterRequest dataOperandFilterRequest = new DataOperandFilterRequest(queryParams, filterActionRequest.getQuerySet(), filterActionRequest.getOperand());
-            ValidationResult validationResult = invokeFilter(dataOperandFilterRequest);
-            res = validationResult.getIsValid();
-            return new DataOperandsFilterResponse(res, null, null, null, validationResult.getValidationReason());
+        } else if (filterActionRequest.getConcernedSubProperty() == null &&
+                filterActionRequest.getBodyOperand() != null &&
+                filterActionRequest.getBodyOperand().equalsIgnoreCase(BodyOperator.LENGTH.toString())) {
+            if(queryParams == null) {
+                val = 0;
+            } else {
+                val = queryParams.length();
+            }
         }
+        DataOperandFilterRequest dataOperandFilterRequest = new DataOperandFilterRequest(val, filterActionRequest.getQuerySet(), filterActionRequest.getOperand());
+        ValidationResult validationResult = invokeFilter(dataOperandFilterRequest);
+        res = validationResult.getIsValid();
+        return new DataOperandsFilterResponse(res, null, null, null, validationResult.getValidationReason());
     }
 
     public void extractQueryParams(FilterActionRequest filterActionRequest, Map<String, Object> varMap, boolean extractMultiple) {
@@ -857,7 +1041,23 @@ public final class FilterAction {
 
     public boolean getMatchingKeysForPayload(Object obj, String parentKey, Object querySet, String operand, Set<String> matchingKeys, boolean doAllSatisfy) {
         Boolean res = false;
-        if (obj instanceof BasicDBObject) {
+        if (obj instanceof JSONObject) {
+            JSONObject basicDBObject = (JSONObject) obj;
+
+            Set<String> keySet = basicDBObject.keySet();
+
+            for(String key: keySet) {
+                if (key == null) {
+                    continue;
+                }
+                Object value = basicDBObject.get(key);
+                doAllSatisfy = getMatchingKeysForPayload(value, key, querySet, operand, matchingKeys, doAllSatisfy);
+                if (parentKey != null && TestEditorEnums.DataOperands.VALUETYPE.toString().equals(operand)) {
+                    matchingKeys.add(parentKey);
+                }
+                
+            }
+        } else if (obj instanceof BasicDBObject) {
             BasicDBObject basicDBObject = (BasicDBObject) obj;
 
             Set<String> keySet = basicDBObject.keySet();
@@ -897,7 +1097,19 @@ public final class FilterAction {
 
     public void valueExists(Object obj, String parentKey, Object querySet, String operand, List<String> matchingKeys, Boolean keyOperandSeen, List<String> matchingValueKeySet, boolean doAllSatisfy, StringBuilder validationReason) {
         Boolean res = false;
-        if (obj instanceof BasicDBObject) {
+        if (obj instanceof JSONObject) {
+            JSONObject basicDBObject = (JSONObject) obj;
+
+            Set<String> keySet = basicDBObject.keySet();
+
+            for(String key: keySet) {
+                if (key == null) {
+                    continue;
+                }
+                Object value = basicDBObject.get(key);
+                valueExists(value, key, querySet, operand, matchingKeys, keyOperandSeen, matchingValueKeySet, doAllSatisfy, validationReason);
+            }
+        } else if (obj instanceof BasicDBObject) {
             BasicDBObject basicDBObject = (BasicDBObject) obj;
 
             Set<String> keySet = basicDBObject.keySet();
@@ -1501,6 +1713,36 @@ public final class FilterAction {
         if (singleTypeInfo == null) return null;
 
         return singleTypeInfo;
+    }
+
+    public DataOperandsFilterResponse applyFilterOnNlpClassification(FilterActionRequest filterActionRequest) {
+        // TODO: MCP - This should work like other term operands
+        // It should get the payload content and perform NLP classification on it
+        // For now, this is a demo placeholder that accepts all but validates nothing
+        
+        RawApi rawApi = filterActionRequest.fetchRawApiBasedOnContext();
+        if (rawApi == null) {
+            return new DataOperandsFilterResponse(false, null, null, null);
+        }
+        
+        // Get the payload content (request or response body)
+        String payload = null;
+        if ("request_payload".equalsIgnoreCase(filterActionRequest.getConcernedProperty())) {
+            payload = rawApi.getRequest().getBody();
+        } else if ("response_payload".equalsIgnoreCase(filterActionRequest.getConcernedProperty())) {
+            payload = rawApi.getResponse().getBody();
+        }
+        
+        if (payload == null) {
+            return new DataOperandsFilterResponse(false, null, null, null);
+        }
+        
+        // TODO: MCP - Call actual NLP classification service on the payload content
+        // The payload content should be analyzed for hate speech, toxicity, etc.
+        // For demo purposes, always return false to indicate feature not implemented
+        
+        return new DataOperandsFilterResponse(false, null, null, null, 
+            "NLP Classification not yet implemented - demo mode. Payload length: " + payload.length());
     }
 
 }

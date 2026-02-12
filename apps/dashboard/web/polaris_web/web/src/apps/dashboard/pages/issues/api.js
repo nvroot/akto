@@ -30,6 +30,13 @@ export default {
             data: {issueIdArray, statusToBeUpdated, ignoreReason, testingRunResultHexIdsMap}
         })
     },
+    bulkUpdateIssueSeverity(issueIdArray, severityToBeUpdated) {
+        return request({
+            url: 'api/bulkUpdateIssueSeverity',
+            method: 'post',
+            data: {issueIdArray, severityToBeUpdated}
+        })
+    },
     fetchTestingRunResult (issueId) {
         return request({
             url: 'api/fetchTestingRunResult',
@@ -51,11 +58,81 @@ export default {
             data: {startTimeStamp, endTimeStamp}
         })
     },
-    bulkCreateJiraTickets(issuesIds, aktoDashboardHost, projId, issueType){
+    bulkCreateJiraTickets(issuesIds, aktoDashboardHost, projId, issueType, jiraMetaData){
         return request({
             url: 'api/bulkCreateJiraTickets',
             method: 'post',
-            data: {issuesIds, aktoDashboardHost, projId, issueType}
+            data: {issuesIds, aktoDashboardHost, projId, issueType, jiraMetaData}
+        })
+    },
+    fetchCreateJiraIssueFieldMetaData() {
+        return request({
+            url: 'api/fetchCreateJiraIssueFieldMetaData',
+            method: 'post',
+            data: {}
+        })
+    },
+    createAzureBoardsWorkItem(testingIssuesId, projectName, workItemType, aktoDashboardHostName, customABWorkItemFieldsPayload) {
+        return request({
+            url: 'api/createAzureBoardsWorkItem',
+            method: 'post',
+            data: {testingIssuesId, projectName, workItemType, aktoDashboardHostName, customABWorkItemFieldsPayload}
+        })
+    },
+    bulkCreateAzureWorkItems(testingIssuesIdList, projectName, workItemType, aktoDashboardHostName, customABWorkItemFieldsPayload) {
+        return request({
+            url: 'api/bulkCreateAzureWorkItems',
+            method: 'post',
+            data: {testingIssuesIdList, projectName, workItemType, aktoDashboardHostName, customABWorkItemFieldsPayload}
+        })
+    },
+    fetchCreateABWorkItemFieldMetaData() {
+        return request({
+            url: 'api/fetchCreateABWorkItemFieldMetaData',
+            method: 'post',
+            data: {}
+        })
+    },
+    createGeneralJiraTicket(payload) {
+        return request({
+            url: 'api/createGeneralJiraTicket',
+            method: 'post',
+            data: payload
+        })
+    },
+    createGeneralAzureBoardsWorkItem(payload) {
+        return request({
+            url: 'api/createGeneralAzureBoardsWorkItem',
+            method: 'post',
+            data: payload
+        })
+    },
+    fetchIssuesByApis() {
+        return request({
+            url: 'api/fetchIssuesByApis',
+            method: 'post',
+            data: {}
+        })
+    },
+    createServiceNowTicket(testingIssuesId, tableName) {
+        return request({
+            url: 'api/createServiceNowTicket',
+            method: 'post',
+            data: {testingIssuesId, tableName}
+        })
+    },
+    bulkCreateServiceNowTickets(testingIssuesIdList, tableName) {
+        return request({
+            url: 'api/bulkCreateServiceNowTickets',
+            method: 'post',
+            data: {testingIssuesIdList, tableName}
+        })
+    },
+    createDevRevTickets(testingIssuesIdList, partId, workItemType, aktoDashboardHost) {
+        return request({
+            url: 'api/createDevRevTickets',
+            method: 'post',
+            data: {testingIssuesIdList, partId, workItemType, aktoDashboardHost}
         })
     }
 }

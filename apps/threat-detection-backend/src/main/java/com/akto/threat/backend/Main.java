@@ -8,31 +8,34 @@ import com.akto.kafka.KafkaConfig;
 import com.akto.kafka.KafkaConsumerConfig;
 import com.akto.kafka.KafkaProducerConfig;
 import com.akto.kafka.Serializer;
-import com.akto.threat.backend.client.IPLookupClient;
+import com.akto.threat.backend.dao.MaliciousEventDao;
+import com.akto.threat.backend.dao.ThreatDetectionDaoInit;
+import com.akto.threat.backend.service.ApiDistributionDataService;
+import com.akto.threat.backend.dao.ApiDistributionDataDao;
 import com.akto.threat.backend.service.MaliciousEventService;
 import com.akto.threat.backend.service.ThreatActorService;
 import com.akto.threat.backend.service.ThreatApiService;
 import com.akto.threat.backend.tasks.FlushMessagesToDB;
+import com.akto.threat.backend.cron.PercentilesCron;
+import com.akto.threat.backend.cron.ArchiveOldMaliciousEventsCron;
+import com.akto.threat.backend.cron.RiskScoreSyncCron;
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoClientSettings;
 import com.mongodb.ReadPreference;
 import com.mongodb.WriteConcern;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import org.apache.commons.io.IOUtils;
 import org.bson.codecs.configuration.CodecRegistry;
 import org.bson.codecs.pojo.PojoCodecProvider;
 
 public class Main {
-  public static void main(String[] args) throws Exception {
 
-    DaoInit.init(new ConnectionString(System.getenv("AKTO_MONGO_CONN")));
+
+  public static void main(String[] args) throws Exception {
 
     ConnectionString connectionString =
         new ConnectionString(System.getenv("AKTO_THREAT_PROTECTION_MONGO_CONN"));
+    String dashboardMongoString = System.getenv("AKTO_MONGO_CONN");
     System.out.println("connectionString: " + connectionString);
     CodecRegistry pojoCodecRegistry =
         fromProviders(PojoCodecProvider.builder().automatic(true).build());
@@ -47,6 +50,18 @@ public class Main {
             .build();
 
     MongoClient threatProtectionMongo = MongoClients.create(clientSettings);
+
+    // Initialize legacy DaoInit for AuthenticationInterceptor (ConfigsDao)
+    // ConfigsDao uses CommonContextDao which connects to "common" database
+    if(dashboardMongoString != null && !dashboardMongoString.isEmpty()) {
+        ConnectionString dashboardMongoConnectionString = new ConnectionString(dashboardMongoString);
+        DaoInit.init(dashboardMongoConnectionString, ReadPreference.primary(), WriteConcern.W1);
+    }else {
+        DaoInit.init(connectionString);
+    }
+
+    ThreatDetectionDaoInit.init(threatProtectionMongo);
+
     KafkaConfig internalKafkaConfig =
         KafkaConfig.newBuilder()
             .setBootstrapServers(System.getenv("THREAT_EVENTS_KAFKA_BROKER_URL"))
@@ -62,28 +77,33 @@ public class Main {
             .setValueSerializer(Serializer.STRING)
             .build();
 
-    IPLookupClient ipLookupClient = new IPLookupClient(getMaxmindFile());
-
     new FlushMessagesToDB(internalKafkaConfig, threatProtectionMongo).run();
 
     MaliciousEventService maliciousEventService =
-        new MaliciousEventService(internalKafkaConfig, threatProtectionMongo, ipLookupClient);
+        new MaliciousEventService(internalKafkaConfig, MaliciousEventDao.instance);
 
-    ThreatActorService threatActorService = new ThreatActorService(threatProtectionMongo);
-    ThreatApiService threatApiService = new ThreatApiService(threatProtectionMongo);
+    ThreatActorService threatActorService = new ThreatActorService(threatProtectionMongo, MaliciousEventDao.instance);
+    ThreatApiService threatApiService = new ThreatApiService(MaliciousEventDao.instance);
+    ApiDistributionDataService apiDistributionDataService = new ApiDistributionDataService(ApiDistributionDataDao.instance);
+    com.akto.log.LoggerMaker logger = new com.akto.log.LoggerMaker(Main.class);
 
-    new BackendVerticle(maliciousEventService, threatActorService, threatApiService).start();
-  }
-
-  private static File getMaxmindFile() throws IOException {
-    File maxmindTmpFile = File.createTempFile("tmp-geo-country", ".mmdb");
-    maxmindTmpFile.deleteOnExit();
-
-    try (FileOutputStream fos = new FileOutputStream(maxmindTmpFile)) {
-      IOUtils.copy(
-          Main.class.getClassLoader().getResourceAsStream("maxmind/Geo-Country.mmdb"), fos);
+     // Start PercentilesCron (single scheduler for all accounts, runs every 2 hours)
+    try {
+      PercentilesCron percentilesCron = new PercentilesCron(threatProtectionMongo);
+      percentilesCron.startCron();
+      logger.infoAndAddToDb("Started PercentilesCron scheduler (runs every 2 hours for all accounts)", com.akto.log.LoggerMaker.LogDb.RUNTIME);
+    } catch (Exception e) {
+      logger.errorAndAddToDb("Error starting PercentilesCron: " + e.getMessage(), com.akto.log.LoggerMaker.LogDb.RUNTIME);
     }
 
-    return maxmindTmpFile;
+    new BackendVerticle(maliciousEventService, threatActorService, threatApiService, apiDistributionDataService).start();
+
+    ArchiveOldMaliciousEventsCron cron = new ArchiveOldMaliciousEventsCron(threatProtectionMongo);
+    cron.cron();
+
+    RiskScoreSyncCron riskScoreSyncCron = new RiskScoreSyncCron();
+    riskScoreSyncCron.setUpRiskScoreSyncCronScheduler();
+    
   }
+
 }

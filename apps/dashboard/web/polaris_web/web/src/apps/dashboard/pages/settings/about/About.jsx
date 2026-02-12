@@ -1,4 +1,4 @@
-import { Box, Button, ButtonGroup, Divider, LegacyCard, Text, VerticalStack, HorizontalGrid, HorizontalStack, Scrollable, TextField, Tag, Form, Tooltip, Checkbox } from '@shopify/polaris'
+import { Box, Button, ButtonGroup, Divider, LegacyCard, Text, VerticalStack, HorizontalGrid, HorizontalStack, Scrollable, TextField, Tag, Form, Tooltip, Checkbox, Modal } from '@shopify/polaris'
 import React, { useEffect, useState } from 'react'
 import settingFunctions from '../module'
 import Dropdown from '../../../components/layouts/Dropdown'
@@ -6,11 +6,11 @@ import PageWithMultipleCards from "../../../components/layouts/PageWithMultipleC
 import settingRequests from '../api'
 import { DeleteMajor, FileFilledMinor } from "@shopify/polaris-icons"
 import TooltipText from "../../../components/shared/TooltipText"
-import { isIP } from "is-ip"
-import isCidr from "is-cidr"
 import func from "@/util/func"
 import TextFieldWithInfo from '../../../components/shared/TextFieldWithInfo'
 import DropdownSearch from '../../../components/shared/DropdownSearch'
+import { handleIpsChange } from '../../../components/shared/ipUtils'
+import UpdateIpsComponent from '../../../components/shared/UpdateIpsComponent'
 
 function About() {
 
@@ -43,9 +43,23 @@ function About() {
     const [isSubscribed, setIsSubscribed] = useState(() => {
         return localStorage.getItem('isSubscribed') === 'true'
     })
+    const [modalOpen, setModalOpen] = useState(false)
+    const [deleteMaliciousEventsModal, setDeleteMaliciousEventsModal] = useState(false)
+    const [disableMalEventButton, setDisableMalEventButton] = useState(false)
 
     const initialUrlsList = settingFunctions.getRedundantUrlOptions()
     const [selectedUrlList, setSelectedUrlsList] = useState([])
+    const [miniTesting, setMiniTesting] = useState(false)
+    const [mergingOnVersions, setMergingOnVersions] = useState(false)
+    const [retrospective, setRetrospective] = useState(false)
+    const [compulsoryDescription, setCompulsoryDescription] = useState({
+        falsePositive: false,
+        noTimeToFix: false,
+        acceptableFix: false
+    })
+    const [blockLogs, setBlockLogs] = useState(false)
+    const [filterLogPolicy, setFilterLogPolicy] = useState([])
+    const [filterLogPolicyText, setFilterLogPolicyText] = useState('')
 
     const setupOptions = settingFunctions.getSetupOptions()
 
@@ -58,12 +72,13 @@ function About() {
         }
         setCurrentTimeZone(accountSettingsDetails?.timezone)
         setAccountName(accountSettingsDetails?.name)
+        setMiniTesting(!accountSettingsDetails?.hybridTestingEnabled)
         setSetuptype(resp.setupType)
         setRedactPayload(resp.redactPayload)
         setNewMerging(resp.urlRegexMatchingEnabled)
         setTrafficThreshold(resp.trafficAlertThresholdSeconds)
         setObjectArr(arr)
-        setEnableTelemetry(resp.telemetrySettings.customerEnabled)
+        setEnableTelemetry(resp.telemetrySettings?.customerEnabled || false)
         if (resp.filterHeaderValueMap)
             setTrafficFiltersMap(resp.filterHeaderValueMap)
 
@@ -74,6 +89,14 @@ function About() {
         setPartnerIpsList(resp.partnerIpList || [])
         setSelectedUrlsList(resp.allowRedundantEndpointsList || [])
         setToggleCaseSensitiveApis(resp.handleApisCaseInsensitive || false)
+        setMergingOnVersions(resp.allowMergingOnVersions || false)
+        if(resp?.compulsoryDescription && Object.keys(resp?.compulsoryDescription).length > 0) {
+            setCompulsoryDescription(resp.compulsoryDescription)
+        }
+        setBlockLogs(resp.blockLogs || false)
+        const policyList = resp.filterLogPolicy || []
+        setFilterLogPolicy(policyList)
+        setFilterLogPolicyText(policyList.join('\n'))
     }
 
     useEffect(()=>{
@@ -227,32 +250,25 @@ function About() {
         await settingRequests.updateApisCaseInsensitive(val);
     }
 
+    const toggleMiniTesting = async(val) => {
+        setMiniTesting(val) ;
+        await settingRequests.switchTestingModule(!val);
+    }
+
+    const handleMergingOnVersions = async(val) => {
+        setMergingOnVersions(val) ;
+        console.log("val", retrospective)
+        await settingRequests.enableMergingOnVersions(val, retrospective);
+    }
+
     
-    const handleIpsChange = async(ip, isAdded, type) => {
-        let ipList = ip.split(",")
-        ipList = ipList.map((x) => x.replace(/\s+/g, '') )
+    const handleCidrIpsChange = async(ip, isAdded, type) => {
         if(type === 'cidr'){
-            let updatedIps = []
-            if(isAdded){
-                updatedIps = [...privateCidrList, ...ipList]
-                
-            }else{
-                updatedIps = privateCidrList.filter(item => item !== ip);
-            }
-            updatedIps = Array.from(new Set(updatedIps))
-            setPrivateCidrList(updatedIps)
+            const updatedIps = handleIpsChange(ip, isAdded, privateCidrList, setPrivateCidrList);
             await settingRequests.configPrivateCidr(updatedIps)
             func.setToast(true, false, "Updated private CIDR ranges")
         }else{
-            let updatedIps = []
-            if(isAdded){
-                updatedIps = [...partnerIpsList, ...ipList]
-                
-            }else{
-                updatedIps = partnerIpsList.filter(item => item !== ip);
-            }
-            updatedIps = Array.from(new Set(updatedIps))
-            setPartnerIpsList(updatedIps)
+            const updatedIps = handleIpsChange(ip, isAdded, partnerIpsList, setPartnerIpsList);
             await settingRequests.configPartnerIps(updatedIps)
             func.setToast(true, false, "Updated partner IPs list")
         }
@@ -263,12 +279,12 @@ function About() {
         func.setToast(true, false, "Access type configuration is being applied. Please wait for some time for the results to be reflected.")
     }
 
-    function ToggleComponent({text,onToggle,initial}){
+    function ToggleComponent({text,onToggle,initial, disabled}){
         return(
             <VerticalStack gap={1}>
                 <Text color="subdued">{text}</Text>
                 <ButtonGroup segmented>
-                    <Button size="slim" onClick={() => onToggle(true)} pressed={initial === true}>
+                    <Button size="slim" onClick={() => onToggle(true)} pressed={initial === true} disabled={disabled}>
                         True
                     </Button>
                     <Button size="slim" onClick={() => onToggle(false)} pressed={initial === false}>
@@ -344,6 +360,136 @@ function About() {
         await settingRequests.handleRedundantUrls(urlsList)
     }
 
+    const printPdf = (pdf) => {
+        try {
+            const byteCharacters = atob(pdf);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            const blob = new Blob([byteArray], { type: "application/pdf" });
+            const link = document.createElement("a");
+            link.href = window.URL.createObjectURL(blob);
+            link.setAttribute("download", "akto_sample_pdf.pdf");
+            document.body.appendChild(link);
+            link.click();
+            func.setToast(true, false, "Report PDF downloaded.")
+        } catch (err) {
+            console.log(err)
+        }
+    }
+
+    const handleDeleteAllMaliciousEvents = async() => {
+        setDeleteMaliciousEventsModal(false)
+        await settingRequests.deleteAllMaliciousEvents().then(() => {
+            func.setToast(true, false, "Deleting malicious events - may take a few minutes.")
+            setDisableMalEventButton(true)
+        }).catch(() => {
+            func.setToast(true, true, "Something went wrong. Please try again.")
+        })
+    }
+
+    const handleCompulsoryToggle = async (key, checked) => {
+        const updated = { ...compulsoryDescription, [key]: checked };
+        setCompulsoryDescription(updated);
+        try {
+            await settingRequests.updateCompulsoryDescription(updated);
+            func.setToast(true, false, "Compulsory description settings updated successfully.");
+            // Re-fetch to ensure UI is fully in sync
+            await fetchDetails();
+        } catch (error) {
+            func.setToast(true, true, "Failed to update compulsory description settings.");
+        }
+    }
+
+    const handleBlockLogsToggle = async (val) => {
+        setBlockLogs(val);
+        await settingRequests.updateBlockLogs(val);
+        func.setToast(true, false, "Block logs setting updated successfully.");
+    }
+
+    const handleFilterLogPolicySave = async () => {
+        try {
+            // Convert text to array by splitting on newlines and filtering empty strings
+            const policyList = filterLogPolicyText.split('\n').map(s => s.trim()).filter(s => s.length > 0);
+            const response = await settingRequests.updateFilterLogPolicy(policyList);
+            setFilterLogPolicy(response);
+            setFilterLogPolicyText(response.join('\n'));
+            func.setToast(true, false, "Filter log policy updated successfully.");
+        } catch (error) {
+            func.setToast(true, true, "Failed to update filter log policy.");
+        }
+    }
+
+    const compulsoryDescriptionComponent = (
+        <VerticalStack gap={4}>
+            <Text variant="headingSm">Compulsory Description Settings</Text>
+            <Text variant="bodyMd" color="subdued">
+                Configure which issue status changes require mandatory descriptions to be provided.
+            </Text>
+            <VerticalStack gap={3}>
+                <Checkbox
+                    label="False Positive - Require description when marking issues as false positive"
+                    checked={compulsoryDescription.falsePositive}
+                    onChange={(checked) => handleCompulsoryToggle('falsePositive', checked)}
+                    disabled={window.USER_ROLE !== 'ADMIN'}
+                />
+                <Checkbox
+                    label="No Time To Fix - Require description when marking issues as no time to fix"
+                    checked={compulsoryDescription.noTimeToFix}
+                    onChange={(checked) => handleCompulsoryToggle('noTimeToFix', checked)}
+                    disabled={window.USER_ROLE !== 'ADMIN'}
+                />
+                <Checkbox
+                    label="Acceptable Risk - Require description when marking issues as acceptable risk"
+                    checked={compulsoryDescription.acceptableFix}
+                    onChange={(checked) => handleCompulsoryToggle('acceptableFix', checked)}
+                    disabled={window.USER_ROLE !== 'ADMIN'}
+                />
+            </VerticalStack>
+        </VerticalStack>
+    )
+
+    const logSettingsComponent = (
+        <VerticalStack gap={4}>
+            <Text variant="headingSm">Log Settings</Text>
+            <Text variant="bodyMd" color="subdued">
+                Configure logging behavior and filtering policies for hybrid modules.
+            </Text>
+            <VerticalStack gap={3}>
+                <ToggleComponent
+                    text="Block logs"
+                    onToggle={handleBlockLogsToggle}
+                    initial={blockLogs}
+                    disabled={window.USER_ROLE !== 'ADMIN'}
+                />
+                <VerticalStack gap={2}>
+                    <Text color="subdued">Filter Log Policy</Text>
+                    <Text variant="bodySm" color="subdued">
+                        Enter one filter pattern per line. Each pattern will be used to filter logs.
+                    </Text>
+                    <HorizontalStack gap={2} align="start">
+                        <Box width="400px">
+                            <TextField
+                                value={filterLogPolicyText}
+                                onChange={setFilterLogPolicyText}
+                                placeholder="Enter filter log policy (one per line)"
+                                disabled={window.USER_ROLE !== 'ADMIN'}
+                                multiline={4}
+                            />
+                        </Box>
+                        {window.USER_ROLE === 'ADMIN' && (
+                            <Button onClick={handleFilterLogPolicySave}>
+                                Save
+                            </Button>
+                        )}
+                    </HorizontalStack>
+                </VerticalStack>
+            </VerticalStack>
+        </VerticalStack>
+    )
+
     const redundantUrlComp = (
         <VerticalStack gap={"4"}>
             <Box width='220px'>
@@ -359,7 +505,52 @@ function About() {
                     isNested={true}
                 />
             </Box>
-            <ToggleComponent text={"Treat URLs as case insensitive"} onToggle={handleApisCaseInsensitive} initial={toggleCaseSensitiveApis} />
+            <ToggleComponent text={"Treat URLs as case insensitive"} onToggle={handleApisCaseInsensitive} initial={toggleCaseSensitiveApis} disabled={window.USER_ROLE !== "ADMIN"}/>
+            <ToggleComponent text={"Use akto's testing module"} onToggle={toggleMiniTesting} initial={miniTesting} disabled={window.USER_ROLE !== "ADMIN"}/>
+            <ToggleComponent text={"Allow merging on versions"} onToggle={() => setModalOpen(true)} initial={mergingOnVersions} disabled={window.USER_ROLE !== "ADMIN"}/>
+            {(window?.DASHBOARD_MODE === 'ON_PREM' || window?.USER_NAME?.toLowerCase()?.includes("@akto.io")) &&
+                <VerticalStack gap={2}>
+                    <Text>Sample PDF Download</Text>
+                    <Box width='200px'>
+                        <Button onClick={async () => {
+                            await settingRequests.downloadSamplePdf().then((res) => {
+                                if(res?.status?.toLowerCase() === 'completed') {
+                                    printPdf(res?.pdf)
+                                }
+                            })
+                        }}>Download</Button>
+                    </Box>
+                </VerticalStack>
+            }
+            <VerticalStack gap={2}>
+                <Text color='subdued' variant='bodyMd'>Delete all malicious events</Text>
+                <Box width='80px'>
+                    <Button disabled={disableMalEventButton} onClick={() => setDeleteMaliciousEventsModal(true)}>Delete</Button>
+                </Box>
+            </VerticalStack>
+
+            <Modal
+                open={deleteMaliciousEventsModal}
+                primaryAction={{
+                    content: "Yes, Delete All",
+                    onAction: handleDeleteAllMaliciousEvents
+                }}
+                secondaryActions={[{
+                    content: "Cancel",
+                    onAction: () => {setDeleteMaliciousEventsModal(false)}
+                }]}
+                title="⚠️ Confirm Permanent Deletion"
+                onClose={() => {setDeleteMaliciousEventsModal(false)}}
+            >
+                <Modal.Section>
+                    <VerticalStack>
+                        <Text>You are about to permanently delete all malicious events.</Text>
+                        <Text>This action cannot be undone and all associated data will be lost forever.</Text>
+                        <br/>
+                        <Text>Are you sure you want to proceed?</Text>
+                    </VerticalStack>
+                </Modal.Section>
+            </Modal>
         </VerticalStack>
     )
     
@@ -478,6 +669,8 @@ function About() {
                                   <ToggleComponent text={"Activate regex matching in merging"} initial={newMerging} onToggle={handleNewMerging} />
                                   <ToggleComponent text={"Enable telemetry"} initial={enableTelemetry} onToggle={toggleTelemetry} />
                                   {redundantUrlComp}
+                                  {compulsoryDescriptionComponent}
+                                  {logSettingsComponent}
                                   <VerticalStack gap={1}>
                                       <Text color="subdued">Traffic alert threshold</Text>
                                       <Box width='120px'>
@@ -498,7 +691,11 @@ function About() {
                       </div>
                   </LegacyCard.Section>
                   :<LegacyCard.Section title={<Text variant="headingMd">More settings</Text>}>
+                    <VerticalStack gap={5}>
                     {redundantUrlComp}
+                    {compulsoryDescriptionComponent}
+                    {logSettingsComponent}
+                    </VerticalStack>
                   </LegacyCard.Section>
               }
             <LegacyCard.Section subdued>
@@ -507,63 +704,6 @@ function About() {
         </LegacyCard>
     )
 
-    function UpdateIpsComponent({onSubmit, title, labelText, description, ipsList, onRemove, type, onApply}){
-        const [value, setValue] = useState('')
-        const onFormSubmit = (ip) => {
-            if(checkError(ip, type)){
-                func.setToast(true, true, "Invalid ip address")
-            }else{
-                setValue('')
-                onSubmit(ip)
-            }
-        }
-
-        const checkError = (localVal, localType) => {
-            localVal = localVal.replace(/\s+/g, '')
-            if (localVal.length === 0) return false
-            const values = localVal.split(",")
-            let valid = true;
-            for (let v of values) {
-                if(v.length === 0){
-                    return true
-                }
-                if(localType=== "cidr"){
-                    valid = valid && (isCidr(v) !== 0)
-                }else{
-                    valid = valid && (isIP(v))
-                }
-            }
-
-            return !valid
-        }
-
-        const isError = checkError(value, type)
-        return(
-            <LegacyCard title={<TitleComponent title={title} description={description} />}
-                actions={[
-                    { content: 'Apply', onAction: onApply }
-                ]}
-            >
-                <Divider />
-                <LegacyCard.Section>
-                    <VerticalStack gap={"2"}>
-                        <Form onSubmit={() => onFormSubmit(value)}>
-                            <TextField onChange={setValue} value={value} label={<Text color="subdued" fontWeight="medium" variant="bodySm">{labelText}</Text>} {...isError ? {error: "Invalid address"} : {}}/>
-                        </Form>
-                        <HorizontalStack gap={"2"}>
-                            {ipsList && ipsList.length > 0 && ipsList.map((ip, index) => {
-                                return(
-                                    <Tag key={index} onRemove={() => onRemove(ip)}>
-                                        <Text>{ip}</Text>
-                                    </Tag>
-                                )
-                            })}
-                        </HorizontalStack>
-                    </VerticalStack>
-                </LegacyCard.Section>
-            </LegacyCard>
-        )
-    }
 
     const components = [accountInfoComponent, 
                         !func.checkLocal() ? <UpdateIpsComponent 
@@ -572,8 +712,8 @@ function About() {
                             title={"Private CIDRs list"}
                             labelText="Add CIDR"
                             ipsList={privateCidrList}
-                            onSubmit={(val) => handleIpsChange(val,true,"cidr")}
-                            onRemove={(val) => handleIpsChange(val, false, "cidr")}
+                            onSubmit={(val) => handleCidrIpsChange(val,true,"cidr")}
+                            onRemove={(val) => handleCidrIpsChange(val, false, "cidr")}
                             onApply={() => applyIps()}
                             type={"cidr"}
                         /> : null,
@@ -583,11 +723,40 @@ function About() {
                             title={"Third parties IPs list"}
                             labelText="Add IP"
                             ipsList={partnerIpsList}
-                            onSubmit={(val) => handleIpsChange(val,true,"partner")}
-                            onRemove={(val) => handleIpsChange(val, false, "partner")}
+                            onSubmit={(val) => handleCidrIpsChange(val,true,"partner")}
+                            onRemove={(val) => handleCidrIpsChange(val, false, "partner")}
                             onApply={() => applyIps()}
                             type={"partner"}
-                        /> : null
+                        /> : null,
+                        <Modal
+                            key="merging-on-versions-modal"
+                            open={modalOpen}
+                            onClose={() => setModalOpen(false)}
+                            title={mergingOnVersions ? "Do not merge on versions" : "Allow merging on versions"}
+                            primaryAction={{
+                                content: 'Save',
+                                onAction: () => {
+                                    handleMergingOnVersions(!mergingOnVersions)
+                                    setModalOpen(false)
+                                },
+                            }}
+                            secondaryActions={[
+                                {
+                                    content: 'Cancel',
+                                    onAction: () => setModalOpen(false),
+                                },
+                            ]}
+                        >
+                            <Modal.Section>
+                                <Text variant="bodyMd" color="subdued">Allow merging on versions will allow you to merge the endpoints with different versions. This will help you to reduce the number of endpoints in your application. Note this job runs in the background and result might get reflected with slight delay.</Text>
+                                {!mergingOnVersions ? <Checkbox
+                                    label="Allow retrospective merging on versions"
+                                    checked={retrospective}
+                                    onChange={() => setTimeout(()=> setRetrospective(!retrospective),[])}
+                                    disabled={window.USER_ROLE !== "ADMIN"}
+                                /> : null}
+                            </Modal.Section>
+                        </Modal>
         ]
 
     return (

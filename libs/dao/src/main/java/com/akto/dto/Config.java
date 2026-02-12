@@ -2,11 +2,15 @@ package com.akto.dto;
 
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
+
+import lombok.Getter;
+import lombok.Setter;
+import org.bson.codecs.pojo.annotations.BsonDiscriminator;
 
 import com.akto.dao.ConfigsDao;
 import com.mongodb.client.model.Filters;
-import org.bson.codecs.pojo.annotations.BsonDiscriminator;
 
 @BsonDiscriminator
 public abstract class Config {
@@ -33,7 +37,8 @@ public abstract class Config {
     public String id;
 
     public enum ConfigType {
-        SLACK, GOOGLE, WEBPUSH, PASSWORD, SALESFORCE, SENDGRID, AUTH0, GITHUB, STIGG, MIXPANEL, SLACK_ALERT, OKTA, AZURE, HYBRID_SAAS, SLACK_ALERT_USAGE, GOOGLE_SAML;
+        SLACK, GOOGLE, WEBPUSH, PASSWORD, SALESFORCE, SENDGRID, AUTH0, GITHUB, STIGG, MIXPANEL, SLACK_ALERT, OKTA, AZURE, HYBRID_SAAS, SLACK_ALERT_USAGE, GOOGLE_SAML, AWS_WAF, SPLUNK_SIEM, AKTO_DASHBOARD_HOST_URL, CLOUDFLARE_WAF, RSA_KP, MCP_REGISTRY,
+        SLACK_ALERT_INTERNAL, ABUSEIPDB, DATA_DOG, BLOCK_ACCESS_WEBHOOK;
     }
 
     public ConfigType configType;
@@ -352,6 +357,22 @@ public abstract class Config {
     }
 
     @BsonDiscriminator
+    @Getter
+    @Setter
+    public static class DataDogConfig extends Config {
+        private String apiKey;
+        private String appKey;
+        private String site;
+        private int accountId;
+        public static final String CONFIG_ID = ConfigType.DATA_DOG.name() + CONFIG_SALT;
+
+        public DataDogConfig(int accountId) {
+            this.configType = ConfigType.DATA_DOG;
+            this.id = CONFIG_ID + "_" + accountId;
+        }
+    }
+
+    @BsonDiscriminator
     public static class OktaConfig extends Config {
         private String clientId;
         private String clientSecret;
@@ -444,6 +465,9 @@ public abstract class Config {
         private String customTestsLabel;
 
         private String activeAccountsLabel;
+        private String aiAssetsLabel;
+        private String mcpAssetsLabel;
+
         public static final String CONFIG_ID = ConfigType.STIGG.name() + CONFIG_SALT;
 
         public StiggConfig() {
@@ -521,6 +545,22 @@ public abstract class Config {
 
         public void setActiveAccountsLabel(String activeAccountsLabel) {
             this.activeAccountsLabel = activeAccountsLabel;
+        }
+
+        public String getAiAssetsLabel() {
+            return aiAssetsLabel;
+        }
+
+        public void setAiAssetsLabel(String aiAssetsLabel) {
+            this.aiAssetsLabel = aiAssetsLabel;
+        }
+
+        public String getMcpAssetsLabel() {
+            return mcpAssetsLabel;
+        }
+
+        public void setMcpAssetsLabel(String mcpAssetsLabel) {
+            this.mcpAssetsLabel = mcpAssetsLabel;
         }
     }
     @BsonDiscriminator
@@ -652,6 +692,36 @@ public abstract class Config {
             this.slackWebhookUrl = slackWebhookUrl;
         }
     }
+
+    @BsonDiscriminator
+    public static class SlackAlertInternalConfig extends Config {
+        private String slackWebhookUrl;
+        private String dastSlackWebhookUrl;
+
+        public static final String CONFIG_ID = ConfigType.SLACK_ALERT_INTERNAL.name() + CONFIG_SALT;
+
+        public SlackAlertInternalConfig() {
+            this.configType = ConfigType.SLACK_ALERT_INTERNAL;
+            this.id = CONFIG_ID;
+        }
+
+        public String getSlackWebhookUrl() {
+            return slackWebhookUrl;
+        }
+
+        public void setSlackWebhookUrl(String slackWebhookUrl) {
+            this.slackWebhookUrl = slackWebhookUrl;
+        }
+
+        public String getDastSlackWebhookUrl() {
+            return dastSlackWebhookUrl;
+        }
+
+        public void setDastSlackWebhookUrl(String dastSlackWebhookUrl) {
+            this.dastSlackWebhookUrl = dastSlackWebhookUrl;
+        }
+    }
+
     @BsonDiscriminator
     public static class HybridSaasConfig extends Config {
         String privateKey;
@@ -683,6 +753,269 @@ public abstract class Config {
 
         public void setPublicKey(String publicKey) {
             this.publicKey = publicKey;
+        }
+    }
+
+    @BsonDiscriminator
+    public static class CloudflareWafConfig extends Config {
+        public static final String API_KEY = "apiKey";
+        private String apiKey;
+        public static final String EMAIL = "email";
+        private String email;
+        public static final String INTEGRATION_TYPE = "integrationType";
+        private String integrationType;
+        public static final String ACCOUNT_OR_ZONE_ID = "accountOrZoneId";
+        private String accountOrZoneId;
+        public static final String ACCOUNT_ID = "accountId";
+        private int accountId;
+        private List<String> severityLevels;
+        public static final String SEVERITY_LEVELS = "severityLevels";
+
+        public static final String _CONFIG_ID = "configId";
+        public static final String CONFIG_ID = ConfigType.CLOUDFLARE_WAF.name();
+
+        public CloudflareWafConfig() {
+            this.configType = ConfigType.CLOUDFLARE_WAF;
+            this.id = CONFIG_ID;
+        }
+
+        public CloudflareWafConfig(String apiKey, String email, String integrationType, String accountOrZoneId, int accountId,List<String> severityLevels) {
+            this.apiKey = apiKey;
+            this.email = email;
+            this.integrationType = integrationType;
+            this.accountOrZoneId = accountOrZoneId;
+            this.accountId = accountId;
+            this.id = accountId + "_" + CONFIG_ID;
+            this.severityLevels = severityLevels;
+        }
+
+        public String getApiKey() {
+            return apiKey;
+        }
+
+        public void setApiKey(String apiKey) {
+            this.apiKey = apiKey;
+        }
+
+        public String getEmail() {
+            return email;
+        }
+
+        public void setEmail(String email) {
+            this.email = email;
+        }
+
+        public String getIntegrationType() {
+            return integrationType;
+        }
+
+        public void setIntegrationType(String integrationType) {
+            this.integrationType = integrationType;
+        }
+
+        public String getAccountOrZoneId() {
+            return accountOrZoneId;
+        }
+
+        public void setAccountOrZoneId(String accountOrZoneId) {
+            this.accountOrZoneId = accountOrZoneId;
+        }
+
+        public int getAccountId() {
+            return accountId;
+        }
+
+        public void setAccountId(int accountId) {
+            this.accountId = accountId;
+        }
+
+        public static String getConfigId() {
+            return CONFIG_ID;
+        }
+
+        public List<String> getSeverityLevels() {
+            return severityLevels;
+        }
+
+        public void setSeverityLevels(List<String> severityLevels) {
+            this.severityLevels = severityLevels;
+        }
+    }
+
+    @BsonDiscriminator
+    public static class AwsWafConfig extends Config {
+        private String awsAccessKey;
+        private String awsSecretKey;
+        private String region;
+        private String ruleSetId;
+        private String ruleSetName;
+        private int accountId;
+        private List<String> severityLevels;
+
+        public static final String CONFIG_ID = ConfigType.AWS_WAF.name();
+
+        public AwsWafConfig() {
+            this.configType = ConfigType.AWS_WAF;
+            this.id = CONFIG_ID;
+        }
+
+        public AwsWafConfig(String awsAccessKey, String awsSecretKey, String region, String ruleSetId,
+                String ruleSetName, int accountId,List<String> severityLevels) {
+            this.awsAccessKey = awsAccessKey;
+            this.awsSecretKey = awsSecretKey;
+            this.region = region;
+            this.ruleSetId = ruleSetId;
+            this.ruleSetName = ruleSetName;
+            this.accountId = accountId;
+            this.id = accountId + "_" + CONFIG_ID;
+        }
+
+        public String getAwsAccessKey() {
+            return awsAccessKey;
+        }
+
+        public void setAwsAccessKey(String awsAccessKey) {
+            this.awsAccessKey = awsAccessKey;
+        }
+
+        public String getAwsSecretKey() {
+            return awsSecretKey;
+        }
+
+        public void setAwsSecretKey(String awsSecretKey) {
+            this.awsSecretKey = awsSecretKey;
+        }
+
+        public String getRegion() {
+            return region;
+        }
+
+        public void setRegion(String region) {
+            this.region = region;
+        }
+
+        public String getRuleSetId() {
+            return ruleSetId;
+        }
+
+        public void setRuleSetId(String ruleSetId) {
+            this.ruleSetId = ruleSetId;
+        }
+
+        public String getRuleSetName() {
+            return ruleSetName;
+        }
+
+        public void setRuleSetName(String ruleSetName) {
+            this.ruleSetName = ruleSetName;
+        }
+
+        public static String getConfigId() {
+            return CONFIG_ID;
+        }
+
+        public int getAccountId() {
+            return accountId;
+        }
+
+        public void setAccountId(int accountId) {
+            this.accountId = accountId;
+        }
+
+        public List<String> getSeverityLevels() {
+            return severityLevels;
+        }
+
+        public void setSeverityLevels(List<String> severityLevels) {
+            this.severityLevels = severityLevels;
+        }
+       
+    }
+
+    @BsonDiscriminator
+    public static class SplunkSiemConfig extends Config {
+        private String splunkUrl;
+        private String splunkToken;
+
+        public static final String CONFIG_ID = ConfigType.SPLUNK_SIEM.name();
+
+        public SplunkSiemConfig() {
+            this.configType = ConfigType.SPLUNK_SIEM;
+            this.id = CONFIG_ID;
+        }
+
+        public SplunkSiemConfig(String splunkUrl, String splunkToken, int accountId) {
+            this.splunkUrl = splunkUrl;
+            this.splunkToken = splunkToken;
+            this.id = accountId + "_" + CONFIG_ID;
+        }
+
+        public String getSplunkUrl() {
+            return splunkUrl;
+        }
+
+        public void setSplunkUrl(String splunkUrl) {
+            this.splunkUrl = splunkUrl;
+        }
+
+        public String getSplunkToken() {
+            return splunkToken;
+        }
+
+        public void setSplunkToken(String splunkToken) {
+            this.splunkToken = splunkToken;
+        }
+       
+    }
+
+    @Getter
+    @Setter
+    @BsonDiscriminator
+    public static class AktoHostUrlConfig extends Config {
+
+        public static final String HOST_URL = "hostUrl";
+        public static final String LAST_SYNCED_AT = "lastSyncedAt";
+
+        private String hostUrl;
+        private int lastSyncedAt;
+
+        public AktoHostUrlConfig() {
+            this.configType = ConfigType.AKTO_DASHBOARD_HOST_URL;
+            this.id = ConfigType.AKTO_DASHBOARD_HOST_URL.name();
+        }
+    }
+
+    @Getter
+    @Setter
+    @BsonDiscriminator
+    public static class RSAKeyPairConfig extends Config {
+
+        public static final String PRIVATE_KEY = "privateKey";
+        public static final String PUBLIC_KEY = "publicKey";
+        public static final String CREATED_AT = "createdAt";
+
+        private String privateKey;
+        private String publicKey;
+        private int createdAt;
+
+        public RSAKeyPairConfig() {
+            this.configType = ConfigType.RSA_KP;
+            this.id = ConfigType.RSA_KP.name() + CONFIG_SALT;
+        }
+
+        public RSAKeyPairConfig(String privateKey, String publicKey) {
+            this.configType = ConfigType.RSA_KP;
+            this.id = ConfigType.RSA_KP.name() + CONFIG_SALT;
+            this.privateKey = privateKey;
+            this.publicKey = publicKey;
+        }
+
+        public RSAKeyPairConfig(String privateKey, String publicKey, int createdAt) {
+            this.configType = ConfigType.RSA_KP;
+            this.id = ConfigType.RSA_KP.name() + CONFIG_SALT;
+            this.privateKey = privateKey;
+            this.publicKey = publicKey;
+            this.createdAt = createdAt;
         }
     }
 
@@ -718,5 +1051,96 @@ public abstract class Config {
                 Filters.eq(OktaConfig.ORGANIZATION_DOMAIN, domain)
         );
         return config;
+    }
+
+    @Getter
+    @Setter
+    @BsonDiscriminator
+    public static class McpRegistryConfig extends Config {
+
+        public static final String REGISTRIES = "registries";
+        public static final String CONFIG_ID = ConfigType.MCP_REGISTRY.name();
+
+        private List<McpRegistry> registries;
+
+        public McpRegistryConfig() {
+            this.configType = ConfigType.MCP_REGISTRY;
+            this.id = CONFIG_ID;
+        }
+
+        public McpRegistryConfig(List<McpRegistry> registries, int accountId) {
+            this.registries = registries;
+            this.id = accountId + "_" + CONFIG_ID;
+            this.configType = ConfigType.MCP_REGISTRY;
+        }
+
+        @Getter
+        @Setter
+        public static class McpRegistry {
+            public static final String ID = "id";
+            public static final String NAME = "name";
+            public static final String URL = "url";
+            public static final String IS_DEFAULT = "isDefault";
+
+            private String id;
+            private String name;
+            private String url;
+            private boolean isDefault;
+
+            public McpRegistry() {}
+
+            public McpRegistry(String id, String name, String url, boolean isDefault) {
+                this.id = id;
+                this.name = name;
+                this.url = url;
+                this.isDefault = isDefault;
+            }
+        }
+    }
+
+    @Getter
+    @Setter
+    @BsonDiscriminator
+    public static class AbuseIPDBConfig extends Config {
+
+        public static final String API_KEY = "apiKey";
+        public static final String CONFIG_ID = ConfigType.ABUSEIPDB.name() + CONFIG_SALT;
+
+        private String apiKey;
+
+        public AbuseIPDBConfig() {
+            this.configType = ConfigType.ABUSEIPDB;
+            this.id = CONFIG_ID;
+        }
+
+        public AbuseIPDBConfig(String apiKey) {
+            this.configType = ConfigType.ABUSEIPDB;
+            this.id = CONFIG_ID;
+            this.apiKey = apiKey;
+        }
+    }
+
+    @Getter
+    @Setter
+    @BsonDiscriminator
+    public static class BlockAccessWebhookConfig extends Config {
+
+        String webhook_url;
+        String slack_alert_type;
+        String slack_app_name;
+
+        public BlockAccessWebhookConfig() {
+            this.configType = ConfigType.BLOCK_ACCESS_WEBHOOK;
+            this.id = configType.name();
+        }
+
+        public BlockAccessWebhookConfig(String webhook_url, String slack_alert_type, String slack_app_name) {
+            this.configType = ConfigType.BLOCK_ACCESS_WEBHOOK;
+            this.id = configType.name();
+            this.webhook_url = webhook_url;
+            this.slack_alert_type = slack_alert_type;
+            this.slack_app_name = slack_app_name;
+        }
+
     }
 }

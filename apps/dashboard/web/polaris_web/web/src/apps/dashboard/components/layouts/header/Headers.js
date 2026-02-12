@@ -1,6 +1,6 @@
 import { TopBar, Icon, Text, ActionList, Modal, TextField, HorizontalStack, Box, Avatar, VerticalStack, Button, Scrollable } from '@shopify/polaris';
-import { NotificationMajor, CustomerPlusMajor, LogOutMinor, NoteMinor, ResourcesMajor, UpdateInventoryMajor, PageMajor, DynamicSourceMajor, PhoneMajor, ChatMajor, SettingsMajor } from '@shopify/polaris-icons';
-import { useState, useCallback, useMemo } from 'react';
+import { NotificationMajor, CustomerPlusMajor, LogOutMinor, NoteMinor, ResourcesMajor, UpdateInventoryMajor, PhoneMajor, ChatMajor, SettingsMajor } from '@shopify/polaris-icons';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Store from '../../../store';
 import PersistStore from '../../../../main/PersistStore';
@@ -11,14 +11,17 @@ import SemiCircleProgress from '../../shared/SemiCircleProgress';
 import { usePolling } from '../../../../main/PollingProvider';
 import { debounce } from 'lodash';
 import LocalStore from '../../../../main/LocalStorageStore';
-import homeFunctions from '../../../../dashboard/pages/home/module';
+import SessionStore from '../../../../main/SessionStore';
+import IssuesStore from '../../../pages/issues/issuesStore';
+import Dropdown from '../Dropdown';
+import Wrapped2025 from './Wrapped2025';
 
-function ContentWithIcon({icon,text, isAvatar= false}) {
-    return(
+function ContentWithIcon({ icon, text, isAvatar = false }) {
+    return (
         <HorizontalStack gap={2}>
             <Box width='20px'>
-                {isAvatar ? <div className='reduce-size'><Avatar size="extraSmall" source={icon} /> </div>:
-                <Icon source={icon} color="base" />}
+                {isAvatar ? <div className='reduce-size'><Avatar size="extraSmall" source={icon} /> </div> :
+                    <Icon source={icon} color="base" />}
             </Box>
             <Text>{text}</Text>
         </HorizontalStack>
@@ -30,31 +33,164 @@ export default function Header() {
     const [searchValue, setSearchValue] = useState('');
     const [newAccount, setNewAccount] = useState('')
     const [showCreateAccount, setShowCreateAccount] = useState(false)
+    const [showWrapped, setShowWrapped] = useState(false);
     const { currentTestsObj, clearPollingInterval } = usePolling();
     const navigate = useNavigate()
 
     const username = Store((state) => state.username)
-    const storeAccessToken = PersistStore(state => state.storeAccessToken)
     const resetAll = PersistStore(state => state.resetAll)
     const resetStore = LocalStore(state => state.resetStore)
+    const resetSession = SessionStore(state => state.resetStore)
+    const resetFields = IssuesStore(state => state.resetStore)
 
-    const allRoutes = Store((state) => state.allRoutes)
+    const dashboardCategory = PersistStore.getState().dashboardCategory;
+    const setDashboardCategory = PersistStore.getState().setDashboardCategory
+
+    useEffect(() => {
+        if (window.beamer_config) {
+            const isOnPrem = window.DASHBOARD_MODE === 'ON_PREM';
+            const isAgentic = dashboardCategory === 'Agentic Security';
+            const isEndpoint = dashboardCategory === 'Endpoint Security';
+
+            const productId = (isAgentic || isEndpoint)
+                ? (isOnPrem ? 'shUignSe80215' : 'ijUqfdSQ80078')
+                : (isOnPrem ? 'rggteHBr72897' : 'cJtNevEq80216');
+
+            const filterTag = isOnPrem ? 'onprem' : 'saas';
+
+            if (window.beamer_config.product_id !== productId || window.beamer_config.filter !== filterTag) {
+                window.beamer_config.product_id = productId;
+                window.beamer_config.filter = filterTag;
+                window.beamer_config.selector = '#beamer-btn';
+                window.beamer_config.onOpen = function () {
+                    var closeButton = document.createElement('div');
+                    closeButton.id = 'beamer-custom-close';
+                    closeButton.innerHTML = '&times;';
+                    closeButton.style.cssText = 'position: fixed; top: 7px; right: 5px; z-index: 2147483650; width: 40px; height: 40px; cursor: pointer; color: black; font-size: 30px; display: flex; align-items: center; justify-content: center; opacity: 0;';
+                    closeButton.onclick = function () {
+                        window.Beamer.hide();
+                    };
+                    document.body.appendChild(closeButton);
+                };
+                window.beamer_config.onClose = function () {
+                    var closeButton = document.getElementById('beamer-custom-close');
+                    if (closeButton) closeButton.remove();
+                };
+                if (window.Beamer) {
+                    window.Beamer.destroy();
+                    window.Beamer.init();
+                }
+            }
+        }
+    }, [dashboardCategory]);
+
+    const handleBeamerClick = useCallback(() => {
+        if (window.Beamer) {
+            window.Beamer.show();
+        }
+    }, []);
+
+
+    const logoSrc = dashboardCategory === "Agentic Security" ? "/public/white_logo.svg" : "/public/akto_name_with_logo.svg";
+    const stiggFeatures = window?.STIGG_FEATURE_WISE_ALLOWED || {};
+    const agenticSecurityGranted =
+        stiggFeatures?.SECURITY_TYPE_AGENTIC?.isGranted || true
+    const mcpSecurityGranted =
+        stiggFeatures?.MCP_SECURITY?.isGranted || true;
+    const dastGranted = func.checkForFeatureSaas("AKTO_DAST")
+    const endpointSecurityGranted = stiggFeatures?.ENDPOINT_SECURITY?.isGranted || true
+
+    const disabledDashboardCategories = useMemo(() => {
+        const disabled = [];
+        if (mcpSecurityGranted === false) {
+            disabled.push("MCP Security");
+        }
+        if (agenticSecurityGranted === false) {
+            disabled.push("Agentic Security");
+        }
+        if (dastGranted === false) {
+            disabled.push("DAST")
+        }
+        if (endpointSecurityGranted === false) {
+            disabled.push("Endpoint Security")
+        }
+        return disabled;
+    }, [mcpSecurityGranted, agenticSecurityGranted, dastGranted, endpointSecurityGranted]);
+
+    const dropdownInitial = disabledDashboardCategories.includes(dashboardCategory)
+        ? "API Security"
+        : (dashboardCategory || "API Security");
+
+    useEffect(() => {
+        if (disabledDashboardCategories.includes(dashboardCategory) && dashboardCategory !== "API Security") {
+            setDashboardCategory("API Security");
+        }
+    }, [dashboardCategory, disabledDashboardCategories, setDashboardCategory]);
+
+    /* Search bar */
+    //const allRoutes = Store((state) => state.allRoutes)
     const allCollections = PersistStore((state) => state.allCollections)
-    const setAllCollections = PersistStore(state => state.setAllCollections)
-    var searchItemsArr = useMemo(() => func.getSearchItemsArr(allRoutes, allCollections), [])
-    const [filteredItemsArr, setFilteredItemsArr] = useState(searchItemsArr)
+    const subCategoryMap = LocalStore(state => state.subCategoryMap)
+    const searchItemsArr = useMemo(() => func.getSearchItemsArr(allCollections, subCategoryMap), [allCollections, subCategoryMap])
+    const [filteredItemsArr, setFilteredItemsArr] = useState(searchItemsArr);
+
+    useEffect(() => {
+        setFilteredItemsArr(searchItemsArr);
+    }, [searchItemsArr]);
+
+    const debouncedSearch = useMemo(() => debounce(async (searchQuery) => {
+        if (searchQuery.length === 0) {
+            setFilteredItemsArr(searchItemsArr);
+        } else {
+            const resultArr = searchItemsArr.filter((x) => x.content.toLowerCase().includes(searchQuery));
+            setFilteredItemsArr(resultArr);
+        }
+    }, 500), [searchItemsArr]);
+
+    const handleSearchChange = useCallback((value) => {
+        setSearchValue(value);
+        debouncedSearch(value.toLowerCase());
+    }, [debouncedSearch]);
+
+    const handleNavigateSearch = useCallback((url) => {
+        navigate(url);
+        handleSearchChange('');
+    }, [navigate, handleSearchChange]);
+
+    const searchResultSections = useMemo(() => func.getSearchResults(filteredItemsArr, handleNavigateSearch), [filteredItemsArr, handleNavigateSearch])
+
+    const searchResultsMarkup = (
+        <Scrollable key={searchValue} style={{ maxHeight: '500px' }} shadow>
+            <ActionList
+                sections={searchResultSections}
+            />
+        </Scrollable>
+    );
+
+    const searchFieldMarkup = (
+        <TopBar.SearchField
+            placeholder="Search collections, tests and connectors"
+            showFocusBorder
+            onChange={handleSearchChange}
+            value={searchValue}
+        />
+    );
+    /* Search bar */
+
+
     const toggleIsUserMenuOpen = useCallback(
         () => setIsUserMenuOpen((isUserMenuOpen) => !isUserMenuOpen),
         [],
     );
 
-    const handleLogOut = async () => { 
+    const handleLogOut = async () => {
         clearPollingInterval()
         api.logout().then(res => {
             resetAll();
-            resetStore() ;
-            storeAccessToken(null)
-            if(res.logoutUrl){
+            resetStore();
+            resetSession();
+            resetFields();
+            if (res.logoutUrl) {
                 window.location.href = res.logoutUrl
             } else {
                 navigate("/login")
@@ -64,42 +200,40 @@ export default function Header() {
         })
     }
 
-    const debouncedSearch = debounce(async (searchQuery) => {
-
-        let apiCollections = []
-        if (allCollections.length === 0 && searchItemsArr.length === 0) {
-            apiCollections = await homeFunctions.getAllCollections()
-            setAllCollections(apiCollections)
-        }
-
-        if (searchItemsArr.length === 0) {
-            searchItemsArr = func.getSearchItemsArr(allRoutes, apiCollections)
-        }
-
-        if(searchQuery.length === 0){
-            setFilteredItemsArr(searchItemsArr)
-        }else{
-            const resultArr = searchItemsArr.filter((x) => x.content.toLowerCase().includes(searchQuery))
-            setFilteredItemsArr(resultArr)
-        }
-    }, 500);
+    const handleDashboardChange = (value) => {
+        PersistStore.getState().setAllCollections([]);
+        PersistStore.getState().setCollectionsMap({});
+        PersistStore.getState().setHostNameMap({});
+        PersistStore.getState().setLastCalledSensitiveInfo(0);
+        PersistStore.getState().setLastFetchedInfo({ lastRiskScoreInfo: 0, lastSensitiveInfo: 0 });
+        LocalStore.getState().setCategoryMap({});
+        LocalStore.getState().setSubCategoryMap({});
+        SessionStore.getState().setThreatFiltersMap({});
+        PersistStore.getState().setFiltersMap({});
+        setDashboardCategory(value);
+        const targetPath = value === "Endpoint Security"
+            ? "/dashboard/observe/agentic-assets"
+            : "/dashboard/observe/inventory";
+        navigate(targetPath);
+        navigate(0);
+    }
 
     function createNewAccount() {
         api.saveToAccount(newAccount).then(resp => {
-          setShowCreateAccount(false)
-          setNewAccount('')
-          resetAll();
-          resetStore();
-          window.location.href="/dashboard/onboarding"
+            setShowCreateAccount(false)
+            setNewAccount('')
+            resetAll();
+            resetStore();
+            window.location.href = "/dashboard/onboarding"
         })
     }
 
     const getColorForIcon = () => {
-        switch (window.DASHBOARD_MODE){
+        switch (window.DASHBOARD_MODE) {
             case "ON_PREM":
                 return "onprem_icon";
             case "LOCAL_DEPLOY":
-                if(window.IS_SAAS !== "true") 
+                if (window.IS_SAAS !== "true")
                     return "local_icon"
                 return "";
             default:
@@ -113,24 +247,26 @@ export default function Header() {
                 {
                     items: [
                         (window.IS_SAAS !== "true" && (window?.DASHBOARD_MODE === 'LOCAL_DEPLOY' || window?.DASHBOARD_MODE === "ON_PREM")) ? {} :
-                        { id: "create_account", content: <ContentWithIcon icon={CustomerPlusMajor} text={"Create account"} />, onAction: () => setShowCreateAccount(true)},
+                            { id: "create_account", content: <ContentWithIcon icon={CustomerPlusMajor} text={"Create account"} />, onAction: () => setShowCreateAccount(true) },
                         // { id: "manage", content: 'Manage account' },
-                        { id: "log-out", content: <ContentWithIcon icon={LogOutMinor} text={"Logout"} /> , onAction: handleLogOut }
+                        { id: "log-out", content: <ContentWithIcon icon={LogOutMinor} text={"Logout"} />, onAction: handleLogOut }
                     ],
                 },
                 {
                     items: [
                         { content: <ContentWithIcon text={"Documentation"} icon={NoteMinor} />, onAction: () => { window.open("https://docs.akto.io/readme") } },
-                        { content: <ContentWithIcon text={"Book a call"} icon={PhoneMajor}/>, onAction: () => { window.open("https://akto.io/api-security-demo") } },
-                        { content: <ContentWithIcon text={"Contact Us"} icon={ChatMajor}/>, onAction: () => { 
-                            if (window?.Intercom) {
-                                window.Intercom('show');
+                        { content: <ContentWithIcon text={"Book a call"} icon={PhoneMajor} />, onAction: () => { window.open("https://akto.io/api-security-demo") } },
+                        {
+                            content: <ContentWithIcon text={"Contact Us"} icon={ChatMajor} />, onAction: () => {
+                                if (window?.Intercom) {
+                                    window.Intercom('show');
+                                }
                             }
-                        } },
-                        { content: <ContentWithIcon text={"Tutorials"} icon={ResourcesMajor}/>, onAction: () => { window.open("https://www.youtube.com/@aktodotio") } },
+                        },
+                        { content: <ContentWithIcon text={"Tutorials"} icon={ResourcesMajor} />, onAction: () => { window.open("https://www.youtube.com/@aktodotio") } },
                         { content: <ContentWithIcon icon={UpdateInventoryMajor} text={"Changelog"} />, onAction: () => { window.open("https://app.getbeamer.com/akto/en") } },
-                        { content: <ContentWithIcon icon="/public/discord.svg" text={"Discord Support"} isAvatar={true}/>, onAction: () => { window.open("https://discord.com/invite/Wpc6xVME4s") } },
-                        { content: <ContentWithIcon icon="/public/github_icon.svg" text={"Star On Github"} isAvatar={true}/>, onAction: () => { window.open("https://github.com/akto-api-security/akto") } }
+                        { content: <ContentWithIcon icon="/public/discord.svg" text={"Discord Support"} isAvatar={true} />, onAction: () => { window.open("https://discord.com/invite/Wpc6xVME4s") } },
+                        { content: <ContentWithIcon icon="/public/github_icon.svg" text={"Star On Github"} isAvatar={true} />, onAction: () => { window.open("https://github.com/akto-api-security/akto") } }
                     ],
                 },
             ]}
@@ -140,45 +276,9 @@ export default function Header() {
         />
     );
 
-    const handleSearchChange = useCallback((value) => {
-        setSearchValue(value);
-        debouncedSearch(value.toLowerCase())
-    }, []);
-
-    const handleNavigateSearch = (url) => {
-        navigate(url)
-        handleSearchChange('')
-    }
-
-    const searchItems = filteredItemsArr.slice(0,20).map((item) => {
-        const icon = item.type === 'page' ? PageMajor : DynamicSourceMajor;
-        return {
-            value: item.content,
-            content: <ContentWithIcon text={item.content} icon={icon} />,
-            onAction: () => handleNavigateSearch(item.url),
-        }
-    })
-
-    const searchResultsMarkup = (
-        <Scrollable style={{maxHeight: '300px'}} shadow>
-        <ActionList
-            items={searchItems}
-        />
-        </Scrollable>
-    );
-
-    const searchFieldMarkup = (
-        <TopBar.SearchField
-            placeholder="Search for API collections"
-            showFocusBorder
-            onChange={handleSearchChange}
-            value={searchValue}
-        />
-    );
-
     const handleTestingNavigate = () => {
         let navUrl = "/dashboard/testing"
-        if(currentTestsObj.testRunsArr.length === 1){
+        if (currentTestsObj.testRunsArr.length === 1) {
             navUrl = navUrl + "/" + currentTestsObj.testRunsArr[0].testingRunId
         }
         navigate(navUrl)
@@ -191,27 +291,34 @@ export default function Header() {
 
     const secondaryMenuMarkup = (
         <HorizontalStack gap="1">
-            {(Object.keys(currentTestsObj).length > 0 && currentTestsObj?.testRunsArr?.length !== 0 && currentTestsObj?.totalTestsCompleted > 0) ? 
-            <HorizontalStack gap="1">
-                <Button plain monochrome onClick={() => {handleTestingNavigate()}}>
-                 <SemiCircleProgress key={"progress"} progress={Math.min(progress, 100)} size={60} height={55} width={75}/>
-                </Button>
-                <VerticalStack gap="1">
-                    <Text fontWeight="medium">Test run status</Text>
-                    <Text color="subdued" variant="bodySm">{`${currentTestsObj.totalTestsQueued} tests queued`}</Text>
-                </VerticalStack>
-            </HorizontalStack> : null}
+            {(Object.keys(currentTestsObj).length > 0 && currentTestsObj?.testRunsArr?.length !== 0 && currentTestsObj?.totalTestsCompleted > 0) ?
+                <HorizontalStack gap="1">
+                    <Button plain monochrome onClick={() => { handleTestingNavigate() }}>
+                        <SemiCircleProgress key={"progress"} progress={Math.min(progress, 100)} size={60} height={55} width={75} />
+                    </Button>
+                    <VerticalStack gap="1">
+                        <Text fontWeight="medium">Test run status</Text>
+                        <Text color="subdued" variant="bodySm">{`${currentTestsObj.totalTestsQueued} tests queued`}</Text>
+                    </VerticalStack>
+                </HorizontalStack> : null}
+
+            {/* 2025 Wrapped Button */}
+            {/* <div style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }} onClick={() => setShowWrapped(true)}>
+                <div style={{ background: 'linear-gradient(to right, #ff416c, #ff4b2b)', borderRadius: '4px', padding: '4px 8px', color: 'white', fontWeight: 'bold', fontSize: '12px' }}>
+                    2025 Wrapped <span style={{marginInlineStart: '2px'}}>🎁</span>
+                </div>
+            </div> */}
+
+            <Button id="beamer-btn" plain monochrome onClick={handleBeamerClick}>
+                <span className={getColorForIcon()}>
+                    <Icon source={NotificationMajor} />
+                </span>
+            </Button>
             <TopBar.Menu
                 activatorContent={
-                    <span id="beamer-btn" className={getColorForIcon()}>
-                        <Icon source={NotificationMajor}/> 
+                    <span style={{ cursor: 'pointer' }} onClick={() => navigate("/dashboard/settings/about")}>
+                        <Icon source={SettingsMajor} />
                     </span>
-                }
-                actions={[]}
-            />
-            <TopBar.Menu
-                activatorContent={
-                    <Button plain monochrome icon={SettingsMajor} onClick={() => navigate("/dashboard/settings/about")} />
                 }
             />
         </HorizontalStack>
@@ -219,13 +326,57 @@ export default function Header() {
 
     const topBarMarkup = (
         <div className='topbar'>
+            {showWrapped && <Wrapped2025 onClose={() => setShowWrapped(false)} />}
             <TopBar
                 showNavigationToggle
                 userMenu={userMenuMarkup}
+                contextControl={
+                    <Box paddingInlineStart={3} paddingInlineEnd={3}>
+                        <HorizontalStack gap={4} wrap={false}>
+                            <div style={{ cursor: 'pointer' }} onClick={() => window.location.href = "/dashboard/observe/inventory"} className='logo'>
+                                <img src={logoSrc} alt="Akto Logo" style={{ maxWidth: '78px' }} />
+                            </div>
+
+                            <Box minWidth='170px'>
+                                <Dropdown
+                                    menuItems={[
+                                        {
+                                            value: "API Security",
+                                            label: "API Security",
+                                            id: "api-security",
+                                            helpText: "Discover and Secure Your APIs"
+                                        },
+                                        {
+                                            value: "Agentic Security",
+                                            label: "Akto ARGUS",
+                                            id: "agentic-security",
+                                            helpText: "Agentic AI Security for Homegrown AI"
+                                        },
+                                        {
+                                            value: "Endpoint Security",
+                                            label: "Akto ATLAS",
+                                            id: "endpoint-security",
+                                            helpText: "Agentic AI Security for Employee Endpoints"
+                                        },
+                                        {
+                                            value: "DAST",
+                                            label: "DAST",
+                                            id: "dast",
+                                            helpText: "Scan Your Apps for Vulnerabilities"
+                                        },
+                                    ]}
+                                    initial={dropdownInitial}
+                                    selected={(val) => handleDashboardChange(val)}
+                                    disabledOptions={disabledDashboardCategories}
+                                />
+                            </Box>
+                        </HorizontalStack>
+                    </Box>
+                }
                 searchField={searchFieldMarkup}
                 searchResultsVisible={searchValue.length > 0}
                 searchResults={searchResultsMarkup}
-                onSearchResultsDismiss={() =>handleSearchChange('')}
+                onSearchResultsDismiss={() => handleSearchChange('')}
                 secondaryMenu={secondaryMenuMarkup}
             />
             <Modal
@@ -247,7 +398,7 @@ export default function Header() {
                         onChange={(input) => setNewAccount(input)}
                         autoComplete="off"
                         maxLength="24"
-                       
+
                         autoFocus
                     />
 

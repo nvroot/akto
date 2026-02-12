@@ -1,36 +1,43 @@
 package com.akto.threat.backend.service;
 
+import com.akto.dao.context.Context;
+import com.akto.log.LoggerMaker;
 import com.akto.proto.generated.threat_detection.service.dashboard_service.v1.ListThreatApiRequest;
 import com.akto.proto.generated.threat_detection.service.dashboard_service.v1.ListThreatApiResponse;
 import com.akto.proto.generated.threat_detection.service.dashboard_service.v1.ThreatCategoryWiseCountRequest;
 import com.akto.proto.generated.threat_detection.service.dashboard_service.v1.ThreatCategoryWiseCountResponse;
 import com.akto.proto.generated.threat_detection.service.dashboard_service.v1.ThreatSeverityWiseCountRequest;
 import com.akto.proto.generated.threat_detection.service.dashboard_service.v1.ThreatSeverityWiseCountResponse;
-import com.akto.threat.backend.constants.MongoDBCollection;
-import com.mongodb.client.MongoClient;
-import com.mongodb.client.MongoCollection;
+import com.akto.threat.backend.dao.MaliciousEventDao;
+import com.akto.threat.backend.utils.ThreatUtils;
 import com.mongodb.client.MongoCursor;
+
+
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+
 import org.bson.Document;
+
 
 public class ThreatApiService {
 
-  private final MongoClient mongoClient;
+  private final MaliciousEventDao maliciousEventDao;
+  private static final LoggerMaker loggerMaker = new LoggerMaker(ThreatApiService.class);
 
-  public ThreatApiService(MongoClient mongoClient) {
-    this.mongoClient = mongoClient;
+  public ThreatApiService(MaliciousEventDao maliciousEventDao) {
+    this.maliciousEventDao = maliciousEventDao;
   }
 
-  public ListThreatApiResponse listThreatApis(String accountId, ListThreatApiRequest request) {
+  public ListThreatApiResponse listThreatApis(String accountId, ListThreatApiRequest request, String contextSource) {
+
+    loggerMaker.info("listThreatApis start ts " + Context.now());
+
     int skip = request.hasSkip() ? request.getSkip() : 0;
     int limit = request.getLimit();
     Map<String, Integer> sort = request.getSortMap();
-    MongoCollection<Document> coll =
-        this.mongoClient
-            .getDatabase(accountId)
-            .getCollection(MongoDBCollection.ThreatDetection.MALICIOUS_EVENTS, Document.class);
 
     List<Document> base = new ArrayList<>();
     ListThreatApiRequest.Filter filter = request.getFilter();
@@ -44,10 +51,20 @@ public class ThreatApiService {
       match.append("latestApiEndpoint", new Document("$in", filter.getUrlsList()));
     }
 
+    if (!filter.getLatestAttackList().isEmpty()) {
+      match.append("filterId", new Document("$in", filter.getLatestAttackList()));
+    }
+
     if (filter.hasDetectedAtTimeRange()) {
       long start = filter.getDetectedAtTimeRange().getStart();
       long end = filter.getDetectedAtTimeRange().getEnd();
       match.append("detectedAt", new Document("$gte", start).append("$lte", end));
+    }
+
+    // Apply simple context filter (only for ENDPOINT and AGENTIC)
+    Document contextFilter = ThreatUtils.buildSimpleContextFilter(contextSource);
+    if (!contextFilter.isEmpty()) {
+      match.putAll(contextFilter);
     }
 
     if (!match.isEmpty()) {
@@ -61,7 +78,8 @@ public class ThreatApiService {
             new Document(
                     "_id",
                     new Document("endpoint", "$latestApiEndpoint")
-                        .append("method", "$latestApiMethod"))
+                        .append("method", "$latestApiMethod")
+                        .append("host", "$host"))
                 .append("discoveredAt", new Document("$last", "$detectedAt"))
                 .append("distinctActors", new Document("$addToSet", "$actor"))
                 .append("requestsCount", new Document("$sum", 1))));
@@ -72,7 +90,7 @@ public class ThreatApiService {
     List<Document> countPipeline = new ArrayList<>(base);
     countPipeline.add(new Document("$count", "total"));
 
-    Document result = coll.aggregate(countPipeline).first();
+    Document result = maliciousEventDao.aggregateRaw(accountId, countPipeline).first();
     long total = result != null ? result.getInteger("total", 0) : 0;
 
     List<Document> pipeline = new ArrayList<>(base);
@@ -89,7 +107,7 @@ public class ThreatApiService {
                 .append("actorsCount", sort.getOrDefault("actorsCount", -1))));
 
     List<ListThreatApiResponse.ThreatApi> apis = new ArrayList<>();
-    try (MongoCursor<Document> cursor = coll.aggregate(pipeline).cursor()) {
+    try (MongoCursor<Document> cursor = maliciousEventDao.aggregateRaw(accountId, pipeline).cursor()) {
       while (cursor.hasNext()) {
         Document doc = cursor.next();
         Document agg = (Document) doc.get("_id");
@@ -97,6 +115,7 @@ public class ThreatApiService {
             ListThreatApiResponse.ThreatApi.newBuilder()
                 .setEndpoint(agg.getString("endpoint"))
                 .setMethod(agg.getString("method"))
+                .setHost(agg.getString("host") != null ? agg.getString("host") : "")
                 .setDiscoveredAt(doc.getLong("discoveredAt"))
                 .setActorsCount(doc.getInteger("actorsCount", 0))
                 .setRequestsCount(doc.getInteger("requestsCount", 0))
@@ -106,44 +125,53 @@ public class ThreatApiService {
       e.printStackTrace();
     }
 
+    loggerMaker.info("listThreatApis end ts " + Context.now());
     return ListThreatApiResponse.newBuilder().addAllApis(apis).setTotal(total).build();
   }
 
   public ThreatCategoryWiseCountResponse getSubCategoryWiseCount(
-      String accountId, ThreatCategoryWiseCountRequest req) {
-    MongoCollection<Document> coll =
-        this.mongoClient
-            .getDatabase(accountId)
-            .getCollection(MongoDBCollection.ThreatDetection.MALICIOUS_EVENTS, Document.class);
+    String accountId, ThreatCategoryWiseCountRequest req, String contextSource) {
+
+    loggerMaker.info("getSubCategoryWiseCount start ts " + Context.now());
 
     List<Document> pipeline = new ArrayList<>();
-    if (req.getStartTs() != 0 || req.getEndTs() != 0) {
-      Document matchFilter = new Document("$match", 
-        new Document("detectedAt", new Document("$gte", req.getStartTs()).append("$lte", req.getEndTs()))
-      );
-      pipeline.add(matchFilter); 
-    }
-    pipeline.add(
-        new Document("$sort", new Document("category", 1).append("detectedAt", -1))); // sort
-    pipeline.add(
-        new Document(
-            "$group",
-            new Document(
-                    "_id",
-                    new Document("category", "$category").append("subCategory", "$subCategory"))
-                .append("count", new Document("$sum", 1))));
+    Document match = new Document();
 
-    pipeline.add(
-        new Document(
-            "$sort",
-            new Document("category", -1).append("subCategory", -1).append("count", -1))); // sort
+    if(!req.getLatestAttackList().isEmpty()) {
+      match.append("filterId", new Document("$in", req.getLatestAttackList()));
+    }
+
+    // 1. Match on time range
+    if (req.getStartTs() != 0 || req.getEndTs() != 0) {
+      match.append("detectedAt", new Document("$gte", req.getStartTs()).append("$lte", req.getEndTs()));
+    }
+
+    // Apply simple context filter (only for ENDPOINT and AGENTIC)
+    Document contextFilter = ThreatUtils.buildSimpleContextFilter(contextSource);
+    if (!contextFilter.isEmpty()) {
+      match.putAll(contextFilter);
+    }
+
+    pipeline.add(new Document("$match", match));
+
+    // 3. Group by category and subCategory
+    pipeline.add(new Document("$group",
+        new Document("_id",
+            new Document("category", "$category")
+            .append("subCategory", "$subCategory"))
+            .append("count", new Document("$sum", 1))));
+
+    // 4. Sort by count descending
+    pipeline.add(new Document("$sort", new Document("count", -1)));
 
     List<ThreatCategoryWiseCountResponse.SubCategoryCount> categoryWiseCounts = new ArrayList<>();
 
-    try (MongoCursor<Document> cursor = coll.aggregate(pipeline).cursor()) {
+    // 5. Execute aggregation with controlled batch size
+    try (MongoCursor<Document> cursor = maliciousEventDao.aggregateRaw(accountId, pipeline).batchSize(1000).cursor()) {
       while (cursor.hasNext()) {
         Document doc = cursor.next();
         Document agg = (Document) doc.get("_id");
+
         categoryWiseCounts.add(
             ThreatCategoryWiseCountResponse.SubCategoryCount.newBuilder()
                 .setCategory(agg.getString("category"))
@@ -153,54 +181,67 @@ public class ThreatApiService {
       }
     }
 
+    loggerMaker.info("getSubCategoryWiseCount end ts " + Context.now());
+
     return ThreatCategoryWiseCountResponse.newBuilder()
         .addAllCategoryWiseCounts(categoryWiseCounts)
         .build();
   }
 
   public ThreatSeverityWiseCountResponse getSeverityWiseCount(
-      String accountId, ThreatSeverityWiseCountRequest req) {
-    MongoCollection<Document> coll =
-        this.mongoClient
-            .getDatabase(accountId)
-            .getCollection(MongoDBCollection.ThreatDetection.MALICIOUS_EVENTS, Document.class);
+    String accountId, ThreatSeverityWiseCountRequest req, String contextSource) {
 
-    List<Document> pipeline = new ArrayList<>();
-    Document matchFilter = new Document("$match", 
-      new Document("detectedAt", new Document("$gte", req.getStartTs()).append("$lte", req.getEndTs()))
-    );
-    pipeline.add(matchFilter);
-    pipeline.add(
-        new Document("$sort", new Document("category", 1).append("detectedAt", -1))); // sort
-    pipeline.add(
-        new Document(
-            "$group",
-            new Document(
-                    "_id",
-                    new Document("severity", "$severity"))
-                .append("count", new Document("$sum", 1))));
-
-    pipeline.add(
-        new Document(
-            "$sort",
-            new Document("severity", -1).append("severity", -1).append("count", -1))); // sort
+    loggerMaker.info("getSeverityWiseCount start ts " + Context.now());
 
     List<ThreatSeverityWiseCountResponse.SeverityCount> categoryWiseCounts = new ArrayList<>();
 
-    try (MongoCursor<Document> cursor = coll.aggregate(pipeline).cursor()) {
+    String[] severities = { "CRITICAL", "HIGH", "MEDIUM", "LOW" };
+
+    // Build match document
+    Document match = new Document()
+        .append("detectedAt", new Document("$gte", req.getStartTs())
+            .append("$lte", req.getEndTs()))
+        .append("severity", new Document("$in", Arrays.asList(severities)));
+
+    if (!req.getLatestAttackList().isEmpty()) {
+        match.append("filterId", new Document("$in", req.getLatestAttackList()));
+    }
+
+      // Apply simple context filter (only for ENDPOINT and AGENTIC)
+      Document contextFilter = ThreatUtils.buildSimpleContextFilter(contextSource);
+      if (!contextFilter.isEmpty()) {
+          match.putAll(contextFilter);
+      }
+
+      List<Document> pipeline = new ArrayList<>();
+      pipeline.add(new Document("$match", match));
+      pipeline.add(new Document("$group", new Document("_id", "$severity")
+          .append("count", new Document("$sum", 1))));
+
+    Map<String, Integer> severityToCount = new HashMap<>();
+    try (MongoCursor<Document> cursor = maliciousEventDao.aggregateRaw(accountId, pipeline).cursor()) {
       while (cursor.hasNext()) {
         Document doc = cursor.next();
-        Document agg = (Document) doc.get("_id");
+        severityToCount.put(doc.getString("_id"), doc.getInteger("count", 0));
+      }
+    }
+
+    for (String severity : severities) {
+      Integer count = severityToCount.get(severity);
+      if (count != null && count > 0) {
         categoryWiseCounts.add(
             ThreatSeverityWiseCountResponse.SeverityCount.newBuilder()
-                .setSeverity(agg.getString("severity"))
-                .setCount(doc.getInteger("count", 0))
+                .setSeverity(severity)
+                .setCount(count)
                 .build());
       }
     }
+
+    loggerMaker.info("getSeverityWiseCount end ts " + Context.now());
 
     return ThreatSeverityWiseCountResponse.newBuilder()
         .addAllCategoryWiseCounts(categoryWiseCounts)
         .build();
   }
+
 }

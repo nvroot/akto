@@ -6,7 +6,7 @@ import func from "@/util/func"
 import GithubSimpleTable from "../../../components/tables/GithubSimpleTable";
 import { useNavigate } from "react-router-dom"
 import dashboardFunc from "../../transform"
-import AktoGptLayout from "../../../components/aktoGpt/AktoGptLayout"
+// import AktoGptLayout from "../../../components/aktoGpt/AktoGptLayout"
 import TitleWithInfo from "@/apps/dashboard/components/shared/TitleWithInfo"
 import { CellType } from "../../../components/tables/rows/GithubRow"
 import useTable from "../../../components/tables/TableContext"
@@ -18,6 +18,7 @@ import InfoCard from "../../dashboard/new_components/InfoCard"
 import ChartypeComponent from "../../testing/TestRunsPage/ChartypeComponent"
 import BarGraph from "../../../components/charts/BarGraph"
 import SpinnerCentered from "../../../components/progress/SpinnerCentered"
+import { getDashboardCategory, mapLabel } from "../../../../main/labelHelper"
 
 const headers = [
     {
@@ -48,13 +49,13 @@ const headers = [
         showFilter: true,
     },
     {
-        title: "API response",
+        title: mapLabel("API response", getDashboardCategory()),
         text: "API response",
         value: "response",
         sortActive: true,
     },
     {
-        title: "API request",
+        title: mapLabel("API request", getDashboardCategory()),
         text: "API request",
         value: "request",
         sortActive: true
@@ -97,11 +98,20 @@ const convertToDataTypesData = (type, collectionsMap, countMap, subtypeToApiColl
 
     const iconSource = (type?.iconString !== undefined && type?.iconString?.length> 0) ? func.getIconFromString(type?.iconString) : func.getSensitiveIcons(type.name)
 
+    // Check if iconSource is an SVG string (starts with "<svg")
+    // If it's SVG, convert it to a data URL so Thumbnail can display it at proper size
+    const isSvgString = typeof iconSource === 'string' && iconSource.trim().startsWith('<svg')
+    const thumbnailSource = isSvgString
+        ? `data:image/svg+xml;utf8,${encodeURIComponent(
+            iconSource.replace('<svg', '<svg width="20" height="20"')
+        )}`
+        : iconSource
+
     return {
         id: type.name,
         nameComp: <Text fontWeight="medium">{type.name}</Text>,
         subType: type.name,
-        avatarComp: <Thumbnail source={iconSource} size="small" />,
+        avatarComp: <Thumbnail source={thumbnailSource} size="small" />,
         priorityVal: priorityText.length > 1 ? severityOrder[priorityText] : 0,
         priorityText: priorityText,
         priorityComp: priorityText.length > 1 ? 
@@ -138,10 +148,10 @@ const convertToDataTypesData = (type, collectionsMap, countMap, subtypeToApiColl
 
 function AllSensitiveData() {
 
-    const [data, setData] = useState({'all': [], "enabled":[], 'disabled': []})
+    const [data, setData] = useState({"all":[], "detected": [], "enabled":[], 'disabled': []})
     const [mapData, setMapData] = useState({})
-    const [prompts, setPrompts] = useState([])
-    const [isGptScreenActive, setIsGptScreenActive] = useState(false)
+    // const [prompts, setPrompts] = useState([])
+    // const [isGptScreenActive, setIsGptScreenActive] = useState(false)
     const navigate = useNavigate()
     const collectionsMap = PersistStore((state) => state.collectionsMap)
     const [summaryInfo, setSummaryInfo] = useState({
@@ -154,9 +164,9 @@ function AllSensitiveData() {
     const [severityCountMap, setSeverityCountMap] = useState([])
     const [loading, setLoading] = useState(false)
 
-    const definedTableTabs = ["All", "Enabled", "Disabled"]
+    const definedTableTabs = ["All", "Detected", "Enabled", "Disabled"]
     const tableSelectedTab = PersistStore.getState().tableSelectedTab[window.location.pathname]
-    const initialSelectedTab = tableSelectedTab || "enabled"
+    const initialSelectedTab = tableSelectedTab || "detected"
     const [selectedTab, setSelectedTab] = useState(initialSelectedTab)
     let initialTabIdx = func.getTableTabIndexById(1, definedTableTabs, initialSelectedTab)
     const [selected, setSelected] = useState(initialTabIdx)
@@ -215,7 +225,7 @@ function AllSensitiveData() {
         const dataTypesVsApisCount = results[2].status === 'fulfilled' ? results[2].value : {};
 
         let dataTypesArr = [...(dataTypesRes?.dataTypes?.aktoDataTypes || []) , ...(dataTypesRes?.dataTypes?.customDataTypes || [])]
-        const reqResCountMap = subTypeCountRes?.response?.subTypeCountMap || {REQUEST: {}, RESPONSE: {}}
+        const reqResCountMap = subTypeCountRes?.subTypeCountMap || {REQUEST: {}, RESPONSE: {}}
         let subtypeToNameMap = {}
 
         let totalSensitive = 0;
@@ -245,6 +255,7 @@ function AllSensitiveData() {
             return convertToDataTypesData(type, collectionsMap, reqResCountMap, dataTypesVsApisCount?.apiCollectionsMap || {})
         })
         temp.all = tempArr
+        temp.detected = tempArr.filter((x) => x.response > 0 || x.request > 0)
         temp.enabled = tempArr.filter((x) => x.active === true)
         temp.disabled = tempArr.filter((x) => x.active === false)
         let finalCountMap = {}
@@ -272,7 +283,7 @@ function AllSensitiveData() {
 
     const summaryInfoData = [
         {
-            title: 'APIs Affected',
+            title: mapLabel("APIs Affected", getDashboardCategory()),
             data: transform.formatNumberWithCommas(summaryInfo.totalAPIs),
             variant: 'heading2xl',
             color: "critical"
@@ -298,12 +309,12 @@ function AllSensitiveData() {
         fetchData();
     }, [])
 
-    function displayGPT(){
-        setIsGptScreenActive(true)
-        let requestObj = {key: "DATA_TYPES"}
-        const activePrompts = dashboardFunc.getPrompts(requestObj)
-        setPrompts(activePrompts)
-    }
+    // function displayGPT(){
+    //     setIsGptScreenActive(true)
+    //     let requestObj = {key: "DATA_TYPES"}
+    //     const activePrompts = dashboardFunc.getPrompts(requestObj)
+    //     setPrompts(activePrompts)
+    // }
 
     function resetSampleData(){
         api.resetSampleData();
@@ -316,7 +327,7 @@ function AllSensitiveData() {
     const secondaryActionsComp = (
         <HorizontalStack gap={"2"}>
             { (func.checkOnPrem() && window?.USER_NAME !== undefined && window.USER_NAME.includes("razorpay")) ? <Button onClick={resetSampleData}>Reset Sample Data</Button> : <></>}
-            <Button onClick={displayGPT}>Ask AktoGPT</Button>
+            {/* <Button onClick={displayGPT}>Ask AktoGPT</Button> */}
             <Button onClick={fillSensitiveDataTypes}>Fill Data Types</Button>
         </HorizontalStack>
     )
@@ -324,8 +335,8 @@ function AllSensitiveData() {
     const graphComponents = (
         <HorizontalGrid key={"graphs"} gap={"5"} columns={2}>
             <InfoCard
-                title={"APIs by Sensitive data severity"}
-                titleToolTip={"Number of APIs per each category"}
+                title={`${mapLabel("APIs", getDashboardCategory())} by Sensitive data severity`}
+                titleToolTip={`Number of ${mapLabel("APIs", getDashboardCategory())} per each category`}
                 component={
                     <BarGraph
                         data={severityCountMap}
@@ -337,7 +348,7 @@ function AllSensitiveData() {
                             },
                         }}
                         showYAxis={true}
-                        yAxisTitle="Number of APIs"
+                        yAxisTitle={`Number of ${mapLabel("APIs", getDashboardCategory())}`}
                         barWidth={100}
                         barGap={12}
                         showGridLines={true}
@@ -388,12 +399,7 @@ function AllSensitiveData() {
             onSelect={(val) => setSelected(val)}
             selected={selected}
             lastColumnSticky={true}
-        />,
-        <Modal key="modal" large open={isGptScreenActive} onClose={()=> setIsGptScreenActive(false)} title="Akto GPT">
-            <Modal.Section flush>
-                <AktoGptLayout prompts={prompts} closeModal={()=> setIsGptScreenActive(false)} />
-            </Modal.Section>
-        </Modal>
+        />
     ]
     
     return (

@@ -7,7 +7,6 @@ import com.akto.dto.*;
 import com.akto.dto.ApiInfo.ApiInfoKey;
 import com.akto.dto.filter.MergedUrls;
 import com.akto.dto.runtime_filters.RuntimeFilter;
-import com.akto.dto.testing.TestingEndpoints;
 import com.akto.dto.type.APICatalog;
 import com.akto.dto.type.SingleTypeInfo;
 import com.akto.dto.type.URLMethods;
@@ -18,10 +17,8 @@ import com.akto.log.LoggerMaker.LogDb;
 import com.akto.runtime.APICatalogSync;
 import com.mongodb.BasicDBObject;
 import com.mongodb.client.model.*;
-import org.apache.commons.lang3.StringUtils;
+import org.bson.Document;
 import org.bson.conversions.Bson;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 
 import java.util.*;
@@ -35,6 +32,8 @@ public class AktoPolicyNew {
     boolean processCalledAtLeastOnce = false;
     ApiAccessTypePolicy apiAccessTypePolicy = new ApiAccessTypePolicy(null);
     boolean redact = false;
+
+    boolean mergeUrlsOnVersions = false;
 
     private static final LoggerMaker loggerMaker = new LoggerMaker(AktoPolicyNew.class);
 
@@ -57,6 +56,7 @@ public class AktoPolicyNew {
                 apiAccessTypePolicy.setPrivateCidrList(cidrList);
             }
             redact = accountSettings.isRedactPayload();
+            mergeUrlsOnVersions = accountSettings.isAllowMergingOnVersions();
         }
 
         apiInfoCatalogMap = new HashMap<>();
@@ -92,9 +92,9 @@ public class AktoPolicyNew {
         loggerMaker.infoAndAddToDb("Built AktoPolicyNew", LogDb.RUNTIME);
     }
 
-    public void syncWithDb() {
+    public void syncWithDb(HttpResponseParams.Source source) {
         loggerMaker.infoAndAddToDb("Syncing with db", LogDb.RUNTIME);
-        UpdateReturn updateReturn = getUpdates(apiInfoCatalogMap);
+        UpdateReturn updateReturn = getUpdates(apiInfoCatalogMap, source);
         List<WriteModel<ApiInfo>> writesForApiInfo = updateReturn.updatesForApiInfo;
         List<WriteModel<FilterSampleData>> writesForSampleData = updateReturn.updatesForSampleData;
         loggerMaker.infoAndAddToDb("Writing to db: " + "writesForApiInfoSize="+writesForApiInfo.size() + " writesForSampleData="+ writesForSampleData.size(), LogDb.RUNTIME);
@@ -118,7 +118,7 @@ public class AktoPolicyNew {
         PolicyCatalog policyCatalog = new PolicyCatalog(apiInfo, filterSampleDataMap);
 
         if (APICatalog.isTemplateUrl(apiInfoKey.url)) {
-            URLTemplate urlTemplate = createUrlTemplate(apiInfoKey.url, apiInfoKey.method);
+            URLTemplate urlTemplate = createUrlTemplate(apiInfoKey.url, apiInfoKey.method, this.mergeUrlsOnVersions);
             Map<URLTemplate, PolicyCatalog> templateURLToMethods = apiInfoCatalog.getTemplateURLToMethods();
             templateURLToMethods.putIfAbsent(urlTemplate, policyCatalog);
         } else {
@@ -142,13 +142,13 @@ public class AktoPolicyNew {
         }
     }
 
-    public static ApiInfoKey generateFromHttpResponseParams(HttpResponseParams httpResponseParams) {
+    public static ApiInfoKey generateFromHttpResponseParams(HttpResponseParams httpResponseParams, boolean mergeUrlsOnVersions) {
         int apiCollectionId = httpResponseParams.getRequestParams().getApiCollectionId();
         String url = httpResponseParams.getRequestParams().getURL();
         url = url.split("\\?")[0];
         String methodStr = httpResponseParams.getRequestParams().getMethod();
         URLMethods.Method method = URLMethods.Method.fromString(methodStr);
-        URLTemplate urlTemplate = APICatalogSync.tryParamteresingUrl(new URLStatic(url, method));
+        URLTemplate urlTemplate = APICatalogSync.tryParamteresingUrl(new URLStatic(url, method), mergeUrlsOnVersions);
         if (urlTemplate != null) {
             url = urlTemplate.getTemplateString();
         }
@@ -158,7 +158,7 @@ public class AktoPolicyNew {
 
     public void process(HttpResponseParams httpResponseParams, List<String> partnerIpsList) throws Exception {
         List<CustomAuthType> customAuthTypes = SingleTypeInfo.getCustomAuthType(Integer.parseInt(httpResponseParams.getAccountId()));
-        ApiInfo.ApiInfoKey apiInfoKey = generateFromHttpResponseParams(httpResponseParams);
+        ApiInfo.ApiInfoKey apiInfoKey = generateFromHttpResponseParams(httpResponseParams, mergeUrlsOnVersions);
         PolicyCatalog policyCatalog = getApiInfoFromMap(apiInfoKey);
         policyCatalog.setSeenEarlier(true);
         ApiInfo apiInfo = policyCatalog.getApiInfo();
@@ -264,7 +264,7 @@ public class AktoPolicyNew {
         return newPolicyCatalog;
     }
 
-    public static UpdateReturn getUpdates(Map<Integer, ApiInfoCatalog> apiInfoCatalogMap) {
+    public static UpdateReturn getUpdates(Map<Integer, ApiInfoCatalog> apiInfoCatalogMap, HttpResponseParams.Source source) {
         List<ApiInfo> apiInfoList = new ArrayList<>();
         List<FilterSampleData> filterSampleDataList = new ArrayList<>();
         for (ApiInfoCatalog apiInfoCatalog: apiInfoCatalogMap.values()) {
@@ -297,78 +297,10 @@ public class AktoPolicyNew {
             }
         }
 
-        List<WriteModel<ApiInfo>> updatesForApiInfo = getUpdatesForApiInfo(apiInfoList);
+        List<WriteModel<ApiInfo>> updatesForApiInfo = getUpdatesForApiInfo(apiInfoList, source);
         List<WriteModel<FilterSampleData>> updatesForSampleData = getUpdatesForSampleData(filterSampleDataList);
-        Map<ApiInfoKey, List<Integer>> updatesForApiGroups = getUpdatesForApiGroups(apiInfoList);
-
-        System.out.println(StringUtils.join(updatesForApiGroups));
 
         return new UpdateReturn(updatesForApiInfo, updatesForSampleData);
-    }
-
-    private static Map<ApiInfoKey, List<Integer>> getUpdatesForApiGroups(List<ApiInfo> apiInfoList) {
-        List<ApiCollection> apiGroups = ApiCollectionsDao.instance.fetchApiGroups();
-        Map<ApiInfoKey, List<Integer>> ret = new HashMap<>();
-        Map<Integer, List<TestingEndpoints>> idToAndList = new HashMap<>();
-        Map<Integer, List<TestingEndpoints>> idToOrList = new HashMap<>();
-
-        for(ApiCollection apiGroup: apiGroups) {
-            int id = apiGroup.getId();
-            if (!idToAndList.containsKey(id)) {
-                idToAndList.put(id, new ArrayList<>());
-            }
-            if (!idToOrList.containsKey(id)) {
-                idToOrList.put(id, new ArrayList<>());
-            }
-            List<TestingEndpoints> andList = idToAndList.get(id);
-            List<TestingEndpoints> orList = idToOrList.get(id);
-            for(TestingEndpoints testingEndpoints: apiGroup.getConditions()) {
-                switch (testingEndpoints.getOperator()) {
-                    case AND:
-                        andList.add(testingEndpoints);
-                        break;
-                    case OR:
-                        orList.add(testingEndpoints);
-                        break;
-                }
-            }
-        }
-
-        for(ApiInfo apiInfo: apiInfoList) {
-            ApiInfoKey apiInfoKey = apiInfo.getId();
-            for(ApiCollection apiGroup: apiGroups) {
-                int id = apiGroup.getId();
-                List<TestingEndpoints> andList = idToAndList.get(id);
-                List<TestingEndpoints> orList = idToOrList.get(id);
-
-                boolean andResult = true;
-                for(TestingEndpoints te: andList) {
-                    if (!te.containsApi(apiInfoKey)) {
-                        andResult = false;
-                        break;
-                    }
-                }
-
-                if (andResult) {
-                    boolean orResult = orList.size() == 0;
-                    for(TestingEndpoints te: orList) {
-                        if (te.containsApi(apiInfoKey)) {
-                            orResult = true;
-                            break;
-                        }
-                    }
-
-                    andResult = orResult;
-                }
-
-                if(andResult) {
-                    List<Integer> apiGroupsToAdd = ret.computeIfAbsent(apiInfoKey, k -> new ArrayList<>());
-                    apiGroupsToAdd.add(id);
-                }
-            }
-        }
-
-        return ret;
     }
 
     public static class UpdateReturn {
@@ -381,7 +313,7 @@ public class AktoPolicyNew {
         }
     }
 
-    public static List<WriteModel<ApiInfo>> getUpdatesForApiInfo(List<ApiInfo> apiInfoList) {
+    public static List<WriteModel<ApiInfo>> getUpdatesForApiInfo(List<ApiInfo> apiInfoList, HttpResponseParams.Source source) {
 
         List<WriteModel<ApiInfo>> updates = new ArrayList<>();
         for (ApiInfo apiInfo: apiInfoList) {
@@ -419,6 +351,11 @@ public class AktoPolicyNew {
 
             // discovered timestamp
             subUpdates.add(Updates.setOnInsert(ApiInfo.DISCOVERED_TIMESTAMP, apiInfo.getDiscoveredTimestamp()));
+
+            // sources
+            if (source != null) {
+                subUpdates.add(Updates.set(SingleTypeInfo.SOURCES + "." + source.name(), new Document("timestamp", Context.now())));
+            }
 
             // last seen
             subUpdates.add(Updates.set(ApiInfo.LAST_SEEN, apiInfo.getLastSeen()));

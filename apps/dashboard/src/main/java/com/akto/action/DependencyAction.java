@@ -44,7 +44,7 @@ public class DependencyAction extends UserAction {
                 ), Projections.include("_id")
         );
         long end = System.currentTimeMillis();
-        loggerMaker.infoAndAddToDb("checkIfDependencyGraphAvailable db call took: " + (end - start) + " ms");
+        loggerMaker.debugAndAddToDb("checkIfDependencyGraphAvailable db call took: " + (end - start) + " ms");
 
         dependencyGraphExists = node != null;
         return SUCCESS.toUpperCase();
@@ -149,14 +149,14 @@ public class DependencyAction extends UserAction {
                 }
 
                 if(messages.isEmpty()){
-                    loggerMaker.infoAndAddToDb("No messages found for invokeDependencyTable");
+                    loggerMaker.debugAndAddToDb("No messages found for invokeDependencyTable");
                     return;
                 }
 
                 try {
                     Utils.pushDataToKafka(newCollectionId, "", messages, new ArrayList<>(), true, true);
                 } catch (Exception e) {
-                    loggerMaker.errorAndAddToDb(e, "Error while sending data to kafka in invoke dependency graph function", LoggerMaker.LogDb.DASHBOARD);
+                    loggerMaker.errorAndAddToDb(e, "Error while sending data to kafka in invoke dependency graph function");
                 }
 
             }

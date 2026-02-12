@@ -6,6 +6,8 @@ import func from "@/util/func"
 import PersistStore from '../../main/PersistStore';
 import api from '../pages/testing/api';
 import Dropdown from './layouts/Dropdown';
+import { labelMap } from '../../main/labelHelperMap';
+import {mapLabel} from '../../main/labelHelper';
 
 const HTTP_METHODS = [
     {'label': 'GET', 'value': 'GET'},
@@ -20,14 +22,43 @@ const HTTP_METHODS = [
     {'label': 'TRACK', 'value': 'TRACK'}
 ]
 
+// Auth types matching ApiInfo.AuthType enum
+const AUTH_TYPES = [
+    { label: 'Unauthenticated', value: 'UNAUTHENTICATED' },
+    { label: 'Basic', value: 'BASIC' },
+    { label: 'Authorization Header', value: 'AUTHORIZATION_HEADER' },
+    { label: 'JWT', value: 'JWT' },
+    { label: 'API Token', value: 'API_TOKEN' },
+    { label: 'Bearer', value: 'BEARER' },
+    { label: 'Custom', value: 'CUSTOM' },
+    { label: 'API Key', value: 'API_KEY' },
+    { label: 'MTLS', value: 'MTLS' },
+    { label: 'Session Token', value: 'SESSION_TOKEN' }
+]
+
+// API Access types matching ApiInfo.ApiAccessType enum
+const API_ACCESS_TYPES = [
+    { label: 'Public', value: 'PUBLIC' },
+    { label: 'Private', value: 'PRIVATE' },
+    { label: 'Partner', value: 'PARTNER' },
+    { label: 'Third Party', value: 'THIRD_PARTY' }
+]
+
 function CollectionComponent(props) {
 
     const { condition, index, dispatch, operatorComponent } = props
     const [apiEndpoints, setApiEndpoints] = useState({})
     const initialRegexText = (condition && condition?.type === 'REGEX') ? (condition?.data?.regex || '') : ''
     const initialHostRegexText = (condition && condition?.type === 'HOST_REGEX') ? (condition?.data?.host_regex || '') : ''
+    const initialTagsText = (condition && condition?.type === 'TAGS') ? (condition?.data?.query || '') : ''
+    const initialAuthTypes = (condition && condition?.type === 'AUTH_TYPE') ? (condition?.data?.authTypes || []) : []
+    const initialApiAccessTypes = (condition && condition?.type === 'API_ACCESS_TYPES') ? (condition?.data?.apiAccessTypes || []) : []
     const [regexText, setRegexText] = useState(initialRegexText)
     const [hostRegexText, setHostRegexText] = useState(initialHostRegexText)
+    const [tagsText, setTagsText] = useState(initialTagsText)
+    const [selectedAuthTypes, setSelectedAuthTypes] = useState(initialAuthTypes)
+    const [selectedApiAccessTypes, setSelectedApiAccessTypes] = useState(initialApiAccessTypes)
+    const dashboardCategory = PersistStore(state => state.dashboardCategory)
 
     useEffect(() => {
         fetchApiEndpoints(condition.data)
@@ -83,11 +114,13 @@ function CollectionComponent(props) {
 
     const getApiEndpointsOptions = (data) => {
         return data.map(apiEndpoint => {
-            let str = func.toMethodUrlString(apiEndpoint);
+            let strLabel = func.toMethodUrlString({...apiEndpoint, shouldParse: true});
+            let strValue = func.toMethodUrlString({...apiEndpoint, shouldParse: false});
+
             return {
-                id: str,
-                label: str,
-                value: str
+                id: strValue,
+                label: strLabel,
+                value: strValue
             }
         })
     }
@@ -123,7 +156,7 @@ function CollectionComponent(props) {
                 <DropdownSearch
                     id={`api-endpoint-${index}`}
                     disabled={apiEndpoints?.endpoints == undefined || apiEndpoints.endpoints.length === 0}
-                    placeholder="Select API endpoint"
+                    placeholder={`Select ${labelMap[dashboardCategory]["API endpoint"]}`}
                     optionsList={apiEndpoints?.endpoints == undefined || typeof apiEndpoints.then == 'function' ? [] :
                         apiEndpoints.endpoints}
                     setSelected={(apiEndpoints) => {
@@ -150,6 +183,12 @@ function CollectionComponent(props) {
                 return {}
             case "HOST_REGEX":
                 return {}
+            case "TAGS":
+                return {}
+            case "AUTH_TYPE":
+                return {authTypes:[]}
+            case "API_ACCESS_TYPES":
+                return {apiAccessTypes:[]}
             default:
                 return {}
         }
@@ -159,7 +198,7 @@ function CollectionComponent(props) {
         <Dropdown
             key={`condition-type-${index}`}
             menuItems={[{
-                label: 'Api list',
+                label: mapLabel(dashboardCategory, 'Api') + ' list',
                 value: 'CUSTOM',
             },
             {
@@ -173,6 +212,18 @@ function CollectionComponent(props) {
             {
                 label: 'Host name matches regex',
                 value: 'HOST_REGEX'
+            },
+            {
+                label: 'Tags',
+                value: 'TAGS'
+            },
+            {
+                label: 'Auth Type',
+                value: 'AUTH_TYPE'
+            },
+            {
+                label: 'API Access Type',
+                value: 'API_ACCESS_TYPES'
             }
         ]}
             initial={condition.type}
@@ -190,6 +241,21 @@ function CollectionComponent(props) {
     const handleHostRegexText = (val) => {
         setHostRegexText(val)
         dispatch({ type: "overwrite", index: index, key: "data", obj: {"host_regex":val } })
+    }
+
+    const handleTagsText = (val) => {
+        setTagsText(val)
+        dispatch({ type: "overwrite", index: index, key: "data", obj: {"query":val } })
+    }
+
+    const handleAuthTypesSelected = (authTypes) => {
+        setSelectedAuthTypes(authTypes)
+        dispatch({ type: "overwrite", index: index, key: "data", obj: {"authTypes": authTypes } })
+    }
+
+    const handleApiAccessTypesSelected = (apiAccessTypes) => {
+        setSelectedApiAccessTypes(apiAccessTypes)
+        dispatch({ type: "overwrite", index: index, key: "data", obj: {"apiAccessTypes": apiAccessTypes } })
     }
 
     const component = (condition, index) => {
@@ -215,6 +281,34 @@ function CollectionComponent(props) {
             case "HOST_REGEX":
                 return(
                     <TextField onChange={(val) => handleHostRegexText(val)} value={hostRegexText} />
+                )
+            case "TAGS":
+                return(
+                    <TextField onChange={(val) => handleTagsText(val)} value={tagsText} />
+                )
+            case "AUTH_TYPE":
+                return(
+                    <DropdownSearch
+                        id={`auth-type-${index}`}
+                        placeholder="Select auth types"
+                        optionsList={AUTH_TYPES}
+                        setSelected={(authTypes) => handleAuthTypesSelected(authTypes)}
+                        preSelected={selectedAuthTypes}
+                        value={selectedAuthTypes.length > 0 ? `${selectedAuthTypes.length} auth type${selectedAuthTypes.length === 1 ? '' : 's'} selected` : undefined}
+                        allowMultiple
+                    />
+                )
+            case "API_ACCESS_TYPES":
+                return(
+                    <DropdownSearch
+                        id={`api-access-type-${index}`}
+                        placeholder="Select API access types"
+                        optionsList={API_ACCESS_TYPES}
+                        setSelected={(apiAccessTypes) => handleApiAccessTypesSelected(apiAccessTypes)}
+                        preSelected={selectedApiAccessTypes}
+                        value={selectedApiAccessTypes.length > 0 ? `${selectedApiAccessTypes.length} access type${selectedApiAccessTypes.length === 1 ? '' : 's'} selected` : undefined}
+                        allowMultiple
+                    />
                 )
             default:
                 break;

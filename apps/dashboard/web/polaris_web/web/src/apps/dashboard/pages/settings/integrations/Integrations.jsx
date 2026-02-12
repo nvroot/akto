@@ -13,6 +13,7 @@ import LayoutWithTabs from '../../../components/layouts/LayoutWithTabs';
 import { useNavigate} from 'react-router-dom'
 import PageWithMultipleCards from '../../../components/layouts/PageWithMultipleCards';
 import func from "@/util/func"
+import { isAgenticSecurityCategory, isMCPSecurityCategory } from '../../../../main/labelHelper'
 
 function Integrations() {
 
@@ -39,11 +40,11 @@ function Integrations() {
         name:'CI/CD',
         source: '/public/ciCd_logo.svg'
     }
-    let aktoGptObj={
-        id: 'akto_gpt',
-        name:'Akto GPT',
-        source: '/public/gpt_logo.svg'
-    }
+    // let aktoGptObj={
+    //     id: 'akto_gpt',
+    //     name:'Akto GPT',
+    //     source: '/public/gpt_logo.svg'
+    // }
     let slackObj={
         id: 'slack',
         name:'Slack',   
@@ -58,7 +59,13 @@ function Integrations() {
       id: 'teamsWebhooks',
       name:'Microsoft Teams Webhooks',
       source: '/public/ms_teams.svg'
-  }
+    }
+
+    let gmailWebhooksObj={
+      id: 'gmailWebhooks',
+      name:'Gmail Webhooks',
+      source: '/public/gmail.svg'
+    }
     let githubSsoObj={
       id: 'github_sso',
       name:'Github SSO',
@@ -68,6 +75,26 @@ function Integrations() {
       id: 'jira',
       name:'Jira',
       source: '/public/logo_jira.svg'
+    }
+    let azureBoardsObj={
+      id: 'azure_boards',
+      name:'Azure Boards',
+      source: '/public/azure-boards.svg'
+    }
+    let adxObj={
+      id: 'adx',
+      name:'Azure Data Explorer',
+      source: '/public/azure_logo.svg'
+    }
+    let serviceNowObj={
+      id: 'servicenow',
+      name:'ServiceNow',
+      source: '/public/servicenow.svg'
+    }
+    let devRevObj={
+      id: 'devrev',
+      name:'DevRev',
+      source: '/public/devrev-ai.svg'
     }
     let jenkinsObj={
       id: `jenkins`,
@@ -118,8 +145,20 @@ function Integrations() {
 
     let splunkObj ={
       id: 'splunk',
-      name:'Splunk',
+      name:'Splunk SIEM',
       source: '/public/splunk.svg'
+    }
+
+    let agentConfigObj ={
+      id: 'agents',
+      name:'Agents',
+      source: '/public/wizard.svg'
+    }
+
+    let mcpRegistryObj ={
+      id: 'mcp_registry',
+      name:'MCP Registry',
+      source: '/public/mcp.svg'
     }
 
     let awsWafObj ={
@@ -132,6 +171,12 @@ function Integrations() {
       id: 'f5_waf',
       name:'F5 WAF',
       source: '/public/F5.svg'
+    }
+
+    let cloudflareWafObj ={
+      id: 'cloudflare_waf',
+      name:'Cloudflare WAF',
+      source: '/public/cloudflareWaf.png'
     }
 
     let ssoItems = [githubSsoObj, oktaSsoObj, azureAdSsoObj, googleWorkSpaceObj]
@@ -194,10 +239,10 @@ function Integrations() {
     const trafficItems = [burpSuiteObj, postmanObj];
     const reportingItems = [githubAppObj];
     const cicdItems = [jenkinsObj, azuredevopsObj, gitlabObj, githubactionsObj, ciCdObj];
-    const aiItems = [aktoGptObj];
-    const alertsItems = [slackObj, webhooksObj, teamsWebhooksObj];
-    const automationItems = [aktoApiObj, ciCdObj, jiraObj];
-    const wafItems = [awsWafObj, f5WafObj];
+    const aiItems = [/* aktoGptObj, */ agentConfigObj, mcpRegistryObj];
+    const alertsItems = [slackObj, webhooksObj, teamsWebhooksObj, gmailWebhooksObj];
+    const automationItems = [aktoApiObj, ciCdObj, jiraObj, azureBoardsObj, adxObj, serviceNowObj, devRevObj];
+    const wafItems = [awsWafObj, f5WafObj, cloudflareWafObj];
     const siemItems = [splunkObj];
     switch (tabId) {
       case 'traffic':
@@ -230,19 +275,19 @@ function Integrations() {
         }
         return automationItems;
       case 'waf':
-        if (func.isDemoAccount()) {
-          return wafItems;
+        if (func.checkLocal()) {
+          return emptyItem;
         }
-        return emptyItem;
+        return wafItems;
       case 'splunk':
-        if (func.isDemoAccount()) {
-          return siemItems;
+        if (func.checkLocal()) {
+          return emptyItem;
         }
-        return emptyItem;
+        return siemItems;
       default:
         let allItems = [...trafficItems, ...aiItems]
         if (!func.checkLocal()){
-          allItems = [...allItems, ...alertsItems, ...automationItems, ...ssoItems,  ...cicdItems]
+          allItems = [...allItems, ...alertsItems, ...automationItems, ...ssoItems,  ...cicdItems, ...wafItems, ...siemItems]
         }
         if(func.checkOnPrem()){
           allItems = [...allItems, ...reportingItems]
@@ -283,6 +328,7 @@ function Integrations() {
             media={media}
             shortcutActions={sourceActions(id)}
             persistActions
+            onClick={() => handleTab(id, link)}
           >
             <Text fontWeight="bold" as="h3">
               {name}

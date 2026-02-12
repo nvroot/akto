@@ -1,10 +1,11 @@
+import { getDashboardCategory, mapLabel } from "../../../../../main/labelHelper";
 import { CellType } from "../../../../components/tables/rows/GithubRow";
 
 const endpointHeadings = [
     {
         text: "Endpoint",
         value: "endpointComp",
-        title: "Api endpoints",
+        title: mapLabel("API endpoints", getDashboardCategory()),
         sortActive: true
     },
     {
@@ -86,7 +87,7 @@ const newParametersHeaders = [
     {
         text: "Endpoint",
         value: "endpointComp",
-        title: "Api endpoints",
+        title: mapLabel("API endpoints", getDashboardCategory()),
         sortKey: 'url',
         filterKey: 'url',
         showFilterMenu: true
@@ -122,13 +123,13 @@ const newParametersHeaders = [
 ]
 
 const parameterResourceName = {
-    singular: 'API parameter',
-    plural: 'API parameters',
+    singular: mapLabel('API parameter', getDashboardCategory()),
+    plural: mapLabel('API parameters', getDashboardCategory()),
 };
 
 const endpointResourceName = {
-    singular: 'API endpoint',
-    plural: 'API endpoints',
+    singular: mapLabel('API endpoint', getDashboardCategory()),
+    plural: mapLabel('API endpoints', getDashboardCategory()),
 };
 
 const methodObj = [{
@@ -208,8 +209,8 @@ let filtersOptions = [
     },
     {
         key: 'collectionIds',
-        label: 'API groups',
-        title: 'API groups',
+        label: mapLabel('API', getDashboardCategory()) + ' groups',
+        title: mapLabel('API', getDashboardCategory()) + ' groups',
         choices: [],
     }
 ]

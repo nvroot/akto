@@ -1,20 +1,23 @@
 package com.akto.testing;
 
 import com.akto.dao.ApiCollectionsDao;
+import com.akto.dao.context.Context;
 import com.akto.dto.*;
 import com.akto.dto.testing.AuthMechanism;
 import com.akto.dto.testing.TestingRunConfig;
-import com.akto.dto.type.URLMethods;
 import com.akto.log.LoggerMaker;
 import com.akto.log.LoggerMaker.LogDb;
-import com.akto.store.AuthMechanismStore;
-import com.akto.rules.TestPlugin;
 import com.akto.store.SampleMessageStore;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static com.akto.runtime.RelationshipSync.extractAllValuesFromPayload;
 
@@ -25,6 +28,8 @@ public class StatusCodeAnalyser {
 
     static List<StatusCodeIdentifier> result = new ArrayList<>();
     static Map<Integer, Integer> defaultPayloadsMap = new HashMap<>();
+
+    private static ExecutorService executor = Executors.newFixedThreadPool(10);
 
     public static class StatusCodeIdentifier {
         public Set<String> keySet;
@@ -41,19 +46,19 @@ public class StatusCodeAnalyser {
         }
     }
 
-    public static void run(Map<ApiInfo.ApiInfoKey, List<String>> sampleDataMap, SampleMessageStore sampleMessageStore, AuthMechanismStore authMechanismStore, TestingRunConfig testingRunConfig, Map<String, String> hostAndContentType) {
+    public static void run(Map<ApiInfo.ApiInfoKey, List<String>> sampleDataMap, SampleMessageStore sampleMessageStore, AuthMechanism authMechanism, TestingRunConfig testingRunConfig, Map<String, String> hostAndContentType) {
         defaultPayloadsMap = new HashMap<>();
         result = new ArrayList<>();
         if (sampleDataMap == null) {
             loggerMaker.errorAndAddToDb("No sample data", LogDb.TESTING);
             return;
         }
-        loggerMaker.infoAndAddToDb("started calc default payloads", LogDb.TESTING);
+        loggerMaker.debugAndAddToDb("started calc default payloads", LogDb.TESTING);
 
         calculateDefaultPayloads(sampleMessageStore, sampleDataMap, testingRunConfig, hostAndContentType);
 
-        loggerMaker.infoAndAddToDb("started fill result", LogDb.TESTING);
-        fillResult(sampleMessageStore, sampleDataMap, authMechanismStore, testingRunConfig);
+        loggerMaker.debugAndAddToDb("started fill result", LogDb.TESTING);
+        fillResult(sampleMessageStore, sampleDataMap, authMechanism, testingRunConfig);
     }
 
     public static Map<String, String> findAllHosts(SampleMessageStore sampleMessageStore, Map<ApiInfo.ApiInfoKey, List<String>> sampleDataMap){
@@ -62,7 +67,7 @@ public class StatusCodeAnalyser {
             String host;
             String contentType;
             try {
-                loggerMaker.infoAndAddToDb("Finding host for apiInfoKey: " + apiInfoKey.toString());
+                loggerMaker.debugAndAddToDb("Finding host for apiInfoKey: " + apiInfoKey.toString());
                 OriginalHttpRequest request = TestExecutor.findOriginalHttpRequest(apiInfoKey, sampleDataMap, sampleMessageStore);
                 host = TestExecutor.findHostFromOriginalHttpRequest(request);
                 contentType = TestExecutor.findContentTypeFromOriginalHttpRequest(request);
@@ -79,38 +84,39 @@ public class StatusCodeAnalyser {
 
     public static void calculateDefaultPayloads(SampleMessageStore sampleMessageStore, Map<ApiInfo.ApiInfoKey, List<String>> sampleDataMap, TestingRunConfig testingRunConfig, Map<String, String> hostAndContentType) {
         for (String host: hostAndContentType.keySet()) {
-            loggerMaker.infoAndAddToDb("calc default payload for host: " + host, LogDb.TESTING);
-            for (int idx=0; idx<11;idx++) {
+            List<Future<Void>> futures = new ArrayList<>();
+            int accountId = Context.accountId.get();
+            for (int idx=0; idx<10;idx++) {
+                final int index = idx;
+                futures.add(executor.submit(() -> {
+                    try {
+                        Context.accountId.set(accountId);
+                        String body = HostValidator.getResponseBodyForHostValidation(host, hostAndContentType, index, testingRunConfig, Main.SKIP_SSRF_CHECK);
+                        fillDefaultPayloadsMap(body);
+                    } catch (Exception e) {
+                        loggerMaker.errorAndAddToDb(e, "Error in calculateDefaultPayloads " + e.getMessage());
+                    }
+                    return null;
+                }));
+            }
+
+            for (Future<Void> future : futures) {
                 try {
-                    String url = host;
-                    if (!url.endsWith("/")) url += "/";
-                    if (idx > 0) url += "akto-"+idx; // we want to hit host url once too
-
-                    String contentType = hostAndContentType.get(host);
-                    Map<String, List<String>> headers = new HashMap<>();
-
-                    if (contentType != null) {
-                        headers.put("content-type", Arrays.asList(contentType));
-                    }
-                    if (host != null && !host.isEmpty()) {
-                        headers.put("host", Arrays.asList(host));
-                    }
-
-                    OriginalHttpRequest request = new OriginalHttpRequest(url, null, URLMethods.Method.GET.name(), null, headers, "");
-                    OriginalHttpResponse response = ApiExecutor.sendRequest(request, true, testingRunConfig, false, new ArrayList<>(), Main.SKIP_SSRF_CHECK);
-                    boolean isStatusGood = TestPlugin.isStatusGood(response.getStatusCode());
-                    if (!isStatusGood) continue;
-
-                    String body = response.getBody();
-                    fillDefaultPayloadsMap(body);
+                    future.get(1, TimeUnit.MINUTES);
+                } catch (InterruptedException | TimeoutException e) {
+                    future.cancel(true); // Cancel the task
+                    loggerMaker.errorAndAddToDb(e, "Timeout in calculateDefaultPayloads");
                 } catch (Exception e) {
-                    loggerMaker.errorAndAddToDb(e, "Error in calculateDefaultPayloads " + e.getMessage(), LogDb.TESTING);
+                    loggerMaker.errorAndAddToDb(e, "Error while waiting for task completion");
                 }
             }
         }
     }
 
     public static void fillDefaultPayloadsMap(String body) {
+        if(body == null || body.isEmpty() || body.equals("{}")) {
+            return;
+        }
         int hash = body.hashCode();
         Integer count = defaultPayloadsMap.getOrDefault(hash, 0);
         defaultPayloadsMap.put(hash, count+1);
@@ -124,12 +130,11 @@ public class StatusCodeAnalyser {
         return occurrence >= 5;
     }
 
-    private static final LoggerMaker loggerMaker = new LoggerMaker(StatusCodeAnalyser.class);
+    private static final LoggerMaker loggerMaker = new LoggerMaker(StatusCodeAnalyser.class, LogDb.TESTING);
     public static int MAX_COUNT = 30;
-    public static void fillResult(SampleMessageStore sampleMessageStore, Map<ApiInfo.ApiInfoKey, List<String>> sampleDataMap, AuthMechanismStore authMechanismStore, TestingRunConfig testingRunConfig) {
-        loggerMaker.infoAndAddToDb("Running status analyser", LogDb.TESTING);
+    public static void fillResult(SampleMessageStore sampleMessageStore, Map<ApiInfo.ApiInfoKey, List<String>> sampleDataMap, AuthMechanism authMechanism, TestingRunConfig testingRunConfig) {
+        loggerMaker.debugAndAddToDb("Running status analyser", LogDb.TESTING);
 
-        AuthMechanism authMechanism = authMechanismStore.getAuthMechanism();
         if (authMechanism == null) {
             loggerMaker.errorAndAddToDb("No auth mechanism", LogDb.TESTING);
             return;
@@ -148,7 +153,7 @@ public class StatusCodeAnalyser {
             }
 
             if (inc >= 5) {
-                loggerMaker.infoAndAddToDb("5 error API calls. Exiting status code analyser", LogDb.TESTING);
+                loggerMaker.debugAndAddToDb("5 error API calls. Exiting status code analyser", LogDb.TESTING);
                 break;
             }
 
@@ -164,7 +169,7 @@ public class StatusCodeAnalyser {
                 }
                 if (success)  {
                     count += 1;
-                    loggerMaker.infoAndAddToDb("count: " + count, LogDb.TESTING);
+                    loggerMaker.debugAndAddToDb("count: " + count, LogDb.TESTING);
                 }
             } catch (Exception e) {
                 loggerMaker.errorAndAddToDb("Error while filling frequency map: " + e, LogDb.TESTING);
@@ -173,7 +178,7 @@ public class StatusCodeAnalyser {
 
         calculateResult(frequencyMap, 5);
 
-        loggerMaker.infoAndAddToDb("result of status code analyser : " + result, LogDb.TESTING);
+        loggerMaker.debugAndAddToDb("result of status code analyser : " + result, LogDb.TESTING);
     }
 
     public static void calculateResult(Map<Set<String>, Map<String,Integer>> frequencyMap, int threshold) {

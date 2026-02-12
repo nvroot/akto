@@ -1,5 +1,10 @@
 package com.akto.runtime.utils;
 
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,6 +24,7 @@ import com.akto.dto.OriginalHttpRequest;
 import com.akto.dto.OriginalHttpResponse;
 import com.akto.dto.RawApi;
 import com.akto.log.LoggerMaker.LogDb;
+import com.akto.util.Constants;
 import com.akto.util.HttpRequestResponseUtils;
 import com.akto.util.JSONUtils;
 import com.alibaba.fastjson2.JSON;
@@ -159,8 +165,19 @@ public class Utils {
         Map<String,List<String>> requestHeaders = OriginalHttpRequest.buildHeadersMap(jsonObject, "requestHeaders");
 
         String rawRequestPayload = jsonObject.getString("requestPayload");
-        String requestPayload = HttpRequestResponseUtils.rawToJsonString(rawRequestPayload,requestHeaders);
-
+        String requestPayload = null;
+        Map<String,String> decryptedRequestPayload = HttpRequestResponseUtils.decryptRequestPayload(rawRequestPayload);
+        if(!decryptedRequestPayload.isEmpty() && decryptedRequestPayload.get("type") != null){
+            requestPayload = decryptedRequestPayload.get("payload");
+            logger.info("decrypted request payload: " + requestPayload,LogDb.RUNTIME);
+            requestHeaders.put(
+                Constants.AKTO_DECRYPT_HEADER,
+                Arrays.asList(decryptedRequestPayload.get("type"))
+            );   
+        }else{
+            requestPayload = HttpRequestResponseUtils.rawToJsonString(rawRequestPayload,requestHeaders);
+        }
+         
         if (GRPC_DEBUG_COUNTER > 0) {
             String acceptableContentType = HttpRequestResponseUtils.getAcceptableContentType(requestHeaders);
             if (acceptableContentType != null && rawRequestPayload.length() > 0) {
@@ -230,6 +247,16 @@ public class Utils {
         originalHttpResponseParams.setRequestParams(ogRequestParams);
 
         return originalHttpResponseParams;
+    }
+
+    public static String convertEpochToDateTime(int epoch) {
+        if (epoch <= 0) {
+            return "Invalid epoch time";
+        }
+        ZonedDateTime dateTime = Instant.ofEpochSecond(epoch)
+                .atZone(ZoneId.systemDefault());
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("dd MMM yyyy, h:mm a");
+        return dateTime.format(formatter);
     }
 
 

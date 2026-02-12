@@ -1,13 +1,9 @@
 package com.akto.store;
 
 import com.akto.dao.SampleDataDao;
-import com.akto.dao.testing.EndpointLogicalGroupDao;
 import com.akto.dao.testing.TestRolesDao;
 import com.akto.dto.*;
 import com.akto.dao.SingleTypeInfoDao;
-import com.akto.dto.ApiInfo;
-import com.akto.dto.HttpRequestParams;
-import com.akto.dto.HttpResponseParams;
 import com.akto.dto.ApiInfo.ApiInfoKey;
 import com.akto.dto.testing.*;
 import com.akto.dto.traffic.Key;
@@ -17,16 +13,17 @@ import com.akto.log.LoggerMaker;
 import com.akto.log.LoggerMaker.LogDb;
 import com.mongodb.BasicDBObject;
 import com.mongodb.client.model.Filters;
+import com.mongodb.client.model.Projections;
+
 import org.bson.conversions.Bson;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
 public class SampleMessageStore {
 
 
-    private static final LoggerMaker loggerMaker = new LoggerMaker(SampleMessageStore.class);
+    private static final LoggerMaker loggerMaker = new LoggerMaker(SampleMessageStore.class, LogDb.TESTING);
     private Map<ApiInfo.ApiInfoKey, List<String>> sampleDataMap = new HashMap<>();
     private Map<String, SingleTypeInfo> singleTypeInfos = new HashMap<>();
     public void buildSingleTypeInfoMap(TestingEndpoints testingEndpoints) {
@@ -86,10 +83,7 @@ public class SampleMessageStore {
         return TestRolesDao.instance.findAll(new BasicDBObject());
     }
 
-
-    public void fetchSampleMessages(Set<Integer> apiCollectionIds) {
-        Bson filterQ = Filters.in("_id.apiCollectionId", apiCollectionIds);
-        List<SampleData> sampleDataList = SampleDataDao.instance.findAll(filterQ, 0, 10_000, null);
+    private void fillSampleDataMap(List<SampleData> sampleDataList){
         Map<ApiInfo.ApiInfoKey, List<String>> tempSampleDataMap = new HashMap<>();
         for (SampleData sampleData: sampleDataList) {
             if (sampleData.getSamples() == null) continue;
@@ -106,6 +100,35 @@ public class SampleMessageStore {
     }
 
 
+    public void fetchSampleMessages(Set<Integer> apiCollectionIds) {
+        Bson filterQ = Filters.in(ApiInfo.ID_API_COLLECTION_ID, apiCollectionIds);
+        List<SampleData> sampleDataList = SampleDataDao.instance.findAll(filterQ, 0, 10_000, null, Projections.slice("samples", -1));
+        loggerMaker.info("Fetched " + sampleDataList.size() + " sample messages for apiCollectionIds: " + apiCollectionIds);
+        fillSampleDataMap(sampleDataList);
+    }
+
+    public void fetchSampleMessages(List<ApiInfo.ApiInfoKey> apiInfoKeyList){
+        List<SampleData> sampleDataList = new ArrayList<>();
+        loggerMaker.info("Api info key list size: " + apiInfoKeyList.size());
+        for(int i = 0 ; i < apiInfoKeyList.size(); i += 100){
+            List<ApiInfoKey> subList = apiInfoKeyList.subList(i, Math.min(i + 100, apiInfoKeyList.size()));
+            List<Bson> filters = subList.stream().map(endpoint -> Filters.and(
+                    Filters.eq(ApiInfo.ID_API_COLLECTION_ID, endpoint.getApiCollectionId()),
+                    Filters.eq(ApiInfo.ID_URL, endpoint.getUrl()),
+                    Filters.eq(ApiInfo.ID_METHOD, endpoint.getMethod().name())))
+                    .collect(Collectors.toList());
+            
+            List<SampleData> sampleDataBatch = SampleDataDao.instance.findAll(Filters.or(filters), Projections.slice("samples", -1));
+            loggerMaker.info("Fetched " + sampleDataBatch.size() + " sample messages for apiInfoKeyList: " + subList);
+            if (sampleDataBatch == null || sampleDataBatch.isEmpty()) {
+                break;
+            }
+            sampleDataList.addAll(sampleDataBatch);
+        }
+        fillSampleDataMap(sampleDataList);
+    }
+
+
 
     public List<RawApi> fetchAllOriginalMessages(ApiInfoKey apiInfoKey) {
         List<RawApi> messages = new ArrayList<>();
@@ -113,15 +136,13 @@ public class SampleMessageStore {
         List<String> samples = sampleDataMap.get(apiInfoKey);
         if (samples == null || samples.isEmpty()) return messages;
 
-        for (String message: samples) {
-            try {
-                messages.add(RawApi.buildFromMessage(message));
-            } catch(Exception e) {
-                loggerMaker.errorAndAddToDb("Error while building RawAPI for "+ apiInfoKey +" : " + e, LogDb.TESTING);
-            }
-
+        String lastSample = samples.get(samples.size() - 1);
+        try {
+            RawApi rawApi = RawApi.buildFromMessage(lastSample, true);
+            messages.add(rawApi);
+        } catch(Exception e) {
+            loggerMaker.errorAndAddToDb("Error while building RawAPI for "+ apiInfoKey +" : " + e, LogDb.TESTING);
         }
-
         return messages;
     }
 

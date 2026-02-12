@@ -5,9 +5,11 @@ import com.akto.dao.PendingInviteCodesDao;
 import com.akto.dao.RBACDao;
 import com.akto.dao.UsersDao;
 import com.akto.dao.context.Context;
+import com.akto.dto.Config;
 import com.akto.dto.CustomRole;
 import com.akto.dto.PendingInviteCode;
 import com.akto.dto.RBAC.Role;
+import com.akto.dto.SignupInfo;
 import com.akto.dto.User;
 import com.akto.log.LoggerMaker;
 import com.akto.notifications.email.SendgridEmail;
@@ -27,6 +29,9 @@ import java.security.spec.InvalidKeySpecException;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.regex.Pattern;
+
+import org.apache.commons.lang3.StringUtils;
 
 public class InviteUserAction extends UserAction{
 
@@ -42,11 +47,26 @@ public class InviteUserAction extends UserAction{
     public static Map<String, String> commonOrganisationsMap = new HashMap<>();
     private static final ExecutorService executor = Executors.newFixedThreadPool(1);
 
+    private static final Pattern EMAIL_PATTERN = Pattern.compile("^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$");
+
+    static {
+        commonOrganisationsMap.put("blinkhealth.com", "blinkhealth.com");
+        commonOrganisationsMap.put("blinkrx.com", "blinkhealth.com");
+        commonOrganisationsMap.put("hollywoodbets.net ", "betsoftware.com ");
+        commonOrganisationsMap.put("betsoftware.com ", "hollywoodbets.net ");
+        commonOrganisationsMap.put("lambdatest.com", "testmuai.com");
+        commonOrganisationsMap.put("testmuai.com", "lambdatest.com");
+    }
+
     public static String validateEmail(String email, String adminLogin) {
         if (email == null) return INVALID_EMAIL_ERROR;
 
         String[] inviteeEmailArr = email.split("@");
         if (inviteeEmailArr.length != 2) {
+            return INVALID_EMAIL_ERROR;
+        }
+
+        if (!EMAIL_PATTERN.matcher(email).matches()) {
             return INVALID_EMAIL_ERROR;
         }
 
@@ -56,11 +76,11 @@ public class InviteUserAction extends UserAction{
         String domain = loginArr[1];
         String inviteeEmailDomain = inviteeEmailArr[1];
 
-        loggerMaker.infoAndAddToDb("inviteeEmailDomain: " + inviteeEmailDomain);
-        loggerMaker.infoAndAddToDb("admin domain: " + domain);
+        loggerMaker.debugAndAddToDb("inviteeEmailDomain: " + inviteeEmailDomain);
+        loggerMaker.debugAndAddToDb("admin domain: " + domain);
 
         boolean isSameDomainVal = isSameDomain(inviteeEmailDomain, domain);
-        loggerMaker.infoAndAddToDb("is same domain: " + isSameDomainVal);
+        loggerMaker.debugAndAddToDb("is same domain: " + isSameDomainVal);
 
         if (!isSameDomainVal && !inviteeEmailDomain.equals(AKTO_DOMAIN))  {
             return DIFFERENT_ORG_EMAIL_ERROR;
@@ -78,13 +98,13 @@ public class InviteUserAction extends UserAction{
         String inviteeOrg = commonOrganisationsMap.get(inviteeDomain);
         String adminOrg = commonOrganisationsMap.get(adminDomain);
 
-        loggerMaker.infoAndAddToDb("inviteeOrg: " + inviteeOrg);
-        loggerMaker.infoAndAddToDb("adminOrg: " + adminOrg);
+        loggerMaker.debugAndAddToDb("inviteeOrg: " + inviteeOrg);
+        loggerMaker.debugAndAddToDb("adminOrg: " + adminOrg);
         if (inviteeOrg == null || adminOrg == null) return false;
 
         if (inviteeOrg.equalsIgnoreCase(adminOrg)) return true;
 
-        loggerMaker.infoAndAddToDb("inviteeOrg and adminOrg different");
+        loggerMaker.debugAndAddToDb("inviteeOrg and adminOrg different");
         return false;
     }
 
@@ -95,16 +115,34 @@ public class InviteUserAction extends UserAction{
 
     @Override
     public String execute() {
-        int user_id = getSUser().getId();
-        loggerMaker.infoAndAddToDb(user_id + " inviting " + inviteeEmail);
+        inviteeEmail = inviteeEmail != null ? inviteeEmail.toLowerCase() : null;
 
-        User admin = UsersDao.instance.getFirstUser(Context.accountId.get());
-        if (admin == null) {
-            loggerMaker.infoAndAddToDb("admin not found for organization");
+        if(inviteeEmail == null) {
+            addActionError("Invalid email");
             return ERROR.toUpperCase();
         }
 
-        loggerMaker.infoAndAddToDb("admin user: " + admin.getLogin());
+        int user_id = getSUser().getId();
+        loggerMaker.debugAndAddToDb(user_id + " inviting " + inviteeEmail);
+
+        Integer accountId = Context.accountId.get();
+        User user = UsersDao.instance.findOne(Filters.and(
+                Filters.eq(User.LOGIN, inviteeEmail),
+                Filters.eq(User.ACCOUNTS+"."+accountId+".accountId", accountId)
+        ));
+        if(user != null) {
+            addActionError("User already exists");
+            return ERROR.toUpperCase();
+        }
+
+
+        User admin = UsersDao.instance.getFirstUser(Context.accountId.get());
+        if (admin == null) {
+            loggerMaker.debugAndAddToDb("admin not found for organization");
+            return ERROR.toUpperCase();
+        }
+
+        loggerMaker.debugAndAddToDb("admin user: " + admin.getLogin());
         String code = validateEmail(this.inviteeEmail, admin.getLogin());
 
         if (code != null) {
@@ -177,7 +215,27 @@ public class InviteUserAction extends UserAction{
             return ERROR.toUpperCase();
         }
 
+        // check if user who is being invited has sso-signup 
+        boolean hasSSOSignup = false;
+        if (StringUtils.isNotBlank(inviteeEmail) && !inviteeEmail.isEmpty()) {
+            User invitedUser = UsersDao.instance.findOne(Filters.and(
+                Filters.eq(User.LOGIN, inviteeEmail)
+            ));
+
+            if(invitedUser != null && invitedUser.getSignupInfoMap() != null && invitedUser.getSignupInfoMap().size() > 0) {
+                for (SignupInfo signupInfo : invitedUser.getSignupInfoMap().values()) {
+                    hasSSOSignup = Config.isConfigSSOType(signupInfo.getConfigType());
+                    if(hasSSOSignup) {
+                        break;
+                    }
+                }
+            }
+        }
+
         String endpoint = DashboardMode.isSaasDeployment() ? "/addUserToAccount" : "/signup";
+        if(hasSSOSignup && DashboardMode.isSaasDeployment()) {
+            endpoint = "/sso-login";
+        }
         finalInviteCode = websiteHostName + endpoint + "?signupInvitationCode=" + inviteCode + "&signupEmailId=" + inviteeEmail;
 
         String inviteFrom = getSUser().getName();

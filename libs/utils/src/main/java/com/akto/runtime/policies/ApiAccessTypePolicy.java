@@ -4,8 +4,9 @@ import com.akto.dto.ApiInfo;
 import com.akto.dto.HttpResponseParams;
 import com.akto.dto.ApiInfo.ApiAccessType;
 import com.akto.dto.runtime_filters.RuntimeFilter;
-
-import org.springframework.security.web.util.matcher.IpAddressMatcher;
+import com.akto.log.LoggerMaker;
+import com.akto.log.LoggerMaker.LogDb;
+import com.akto.util.http_util.CoreHTTPClient;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -15,6 +16,7 @@ public class ApiAccessTypePolicy {
     private List<String> privateCidrList;
 
 	public static final String X_FORWARDED_FOR = "x-forwarded-for";
+    private static final LoggerMaker logger = new LoggerMaker(ApiAccessTypePolicy.class, LogDb.RUNTIME);
 
     public ApiAccessTypePolicy(List<String> privateCidrList) {
         this.privateCidrList = privateCidrList;
@@ -56,6 +58,17 @@ public class ApiAccessTypePolicy {
             "x-client-ip",
             "client-ip");
 
+    public static String cleanIp(String ip) {
+        try {
+            String[] parts = ip.split(":");
+            return parts[0];
+        } catch (Exception e) {
+        }
+        return ip;
+    }
+
+    final private static String STANDARD_PRIVATE_IP = "0.0.0.0";
+
     public static List<String> getSourceIps(HttpResponseParams httpResponseParams){
         List<String> clientIps = new ArrayList<>();
         for (String header : CLIENT_IP_HEADERS) {
@@ -64,18 +77,20 @@ public class ApiAccessTypePolicy {
                 clientIps.addAll(headerValues);
             }
         }
-
         List<String> ipList = new ArrayList<>();
         for (String ip: clientIps) {
             String[] parts = ip.trim().split("\\s*,\\s*"); // This approach splits the string by commas and also trims any whitespace around the individual elements. 
             ipList.addAll(Arrays.asList(parts));
         }
 
+        logger.debug("Client IPs: " + clientIps);
         String sourceIP = httpResponseParams.getSourceIP();
 
         if (sourceIP != null && !sourceIP.isEmpty() && !sourceIP.equals("null")) {
-            ipList.add(sourceIP);
+            logger.debug("Received source IP: " + sourceIP);
+            ipList.add(cleanIp(sourceIP));
         }
+        logger.debug("Final IP list: " + ipList);
         return ipList;
     }
 
@@ -85,7 +100,7 @@ public class ApiAccessTypePolicy {
 
         String destIP = httpResponseParams.getDestIP();
         if (destIP != null && !destIP.isEmpty() && !destIP.equals("null")) {
-            ipList.add(destIP);
+            ipList.add(cleanIp(destIP));
         }
 
         if (ipList.isEmpty() ) return;
@@ -105,6 +120,7 @@ public class ApiAccessTypePolicy {
 
         for (String ip: ipList) {
            if (ip == null) continue;
+           if(ip.equals(STANDARD_PRIVATE_IP)) continue;
            ip = ip.replaceAll(" ", "");
            try {
                 boolean result = ipInCidr(ip);
@@ -135,7 +151,7 @@ public class ApiAccessTypePolicy {
     }
 
     public boolean ipInCidr(String ip) {
-        IpAddressMatcher ipAddressMatcher;
+
         // todo: add standard private IP list
         List<String> checkList = new ArrayList<>();
         if (privateCidrList != null && !privateCidrList.isEmpty()) {
@@ -143,9 +159,14 @@ public class ApiAccessTypePolicy {
         }
 
         for (String cidr : checkList) {
-            ipAddressMatcher = new IpAddressMatcher(cidr);
-            boolean result = ipAddressMatcher.matches(ip);
-            if (result) return true;
+            try {
+                /*
+                 * matches ipv4 and ipv6 CIDR and subnet ranges.
+                 */
+                return CoreHTTPClient.ipContains(cidr, ip);
+            } catch (Exception e) {
+                logger.error("Error checking IP in CIDR range: " + e.getMessage());
+            }
         }
 
         return false;

@@ -5,6 +5,7 @@ import DropdownSearch from './shared/DropdownSearch';
 import func from "@/util/func"
 import api from '../pages/testing/api';
 import PersistStore from '../../main/PersistStore';
+import { labelMap } from '../../main/labelHelperMap';
 
 function ConditionComponent(props) {
 
@@ -21,13 +22,16 @@ function ConditionComponent(props) {
         label: collection.displayName,
         value: collection.id
     }))
+    const dashboardCategory = PersistStore(state => state.dashboardCategory)
     const getApiEndpointsOptions = (data) => {
         return data.map(apiEndpoint => {
-            let str = func.toMethodUrlString(apiEndpoint);
+            let strLabel = func.toMethodUrlString({...apiEndpoint, shouldParse: true});
+            let strValue = func.toMethodUrlApiCollectionIdString({...apiEndpoint, shouldParse: false});
+            
             return {
-                id: str,
-                label: str,
-                value: str
+                id: strValue,
+                label: strLabel,
+                value: strValue
             }
         })
     }
@@ -89,7 +93,7 @@ function ConditionComponent(props) {
         let collectionId = getCollectionId(field);
         if(collectionId==undefined)
             return [];
-        return field.value[collectionId].map((obj)=> {return func.toMethodUrlString(obj)})
+        return field.value[collectionId].map((obj)=> {return func.toMethodUrlApiCollectionIdString(obj)})
     }
 
     const prefixLeft = (field) => (
@@ -120,11 +124,11 @@ function ConditionComponent(props) {
                 <DropdownSearch
                     id={`${id}-api-endpoint-${index}`}
                     disabled={apiEndpoints?.endpoints == undefined || apiEndpoints.endpoints.length === 0}
-                    placeholder="Select API endpoint"
+                    placeholder={`Select ${labelMap[dashboardCategory]["API endpoint"]}`}
                     optionsList={apiEndpoints?.endpoints == undefined || typeof apiEndpoints.then == 'function' ? [] : 
                                     apiEndpoints.endpoints}
                     setSelected={(apiEndpoints) => {handleEndpointsSelected(apiEndpoints.map((obj) => {
-                         return func.toMethodUrlObject(obj) }), field) }}
+                         return func.toMethodUrlApiCollectionIdObject(obj) }), field) }}
                     preSelected={getEndpoints(field)}
                     itemName={"endpoint"}
                     value={getEndpointCount(field)}

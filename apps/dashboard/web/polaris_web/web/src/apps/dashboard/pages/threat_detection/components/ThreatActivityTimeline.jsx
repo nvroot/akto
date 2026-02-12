@@ -5,6 +5,7 @@ import dayjs from "dayjs";
 import { useEffect, useState } from "react";
 import { Spinner } from "@shopify/polaris";
 import api from "../api";
+import { getDashboardCategory, mapLabel } from "../../../../main/labelHelper";
 
 
 const ThreatActivityTimeline = ({ startTimestamp, endTimestamp, onSubCategoryClick }) => {
@@ -25,7 +26,6 @@ const ThreatActivityTimeline = ({ startTimestamp, endTimestamp, onSubCategoryCli
         const sortedTimelines = response.threatActivityTimelines.sort((a, b) => a.ts - b.ts);
         setSortedTimelines(sortedTimelines);
         const distinctSubCategories = [...new Set(response.threatActivityTimelines.flatMap(item => item.subCategoryWiseData.map(subItem => subItem.subcategory)))];
-        console.log({ response });
         const series = distinctSubCategories.map((subCategory, index) => ({
             color: COLORMAP[index % 5],
             name: subCategory,
@@ -45,10 +45,6 @@ const ThreatActivityTimeline = ({ startTimestamp, endTimestamp, onSubCategoryCli
         setSeriesData(series);
         setLoading(false);
     }
-    
-    useEffect(() => {
-        console.log('$$$ fetching threat activity timeline');
-    }, []);
 
     useEffect(() => {
         fetchThreatActivityTimeline();
@@ -75,7 +71,7 @@ const ThreatActivityTimeline = ({ startTimestamp, endTimestamp, onSubCategoryCli
         },
         yAxis: {
             title: {
-                text: "# of APIs"
+                text: `# of ${mapLabel("APIs", getDashboardCategory())}`
             }
         },
         plotOptions: {
@@ -95,8 +91,8 @@ const ThreatActivityTimeline = ({ startTimestamp, endTimestamp, onSubCategoryCli
 
     return (
         <InfoCard
-            title={"Threat Activity Timeline"}
-            titleToolTip={"Threat activity by sub-category over time. Maximum of one week is displayed."}
+            title={`${mapLabel("Threat", getDashboardCategory())} Activity Timeline`}
+            titleToolTip={`${mapLabel("Threat", getDashboardCategory())} activity by sub-category over time. Maximum of one week is displayed.`}
             component={<HighchartsReact highcharts={Highcharts} options={chartOptions} />}
         />
     )

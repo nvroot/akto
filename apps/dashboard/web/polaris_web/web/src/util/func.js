@@ -1,7 +1,7 @@
 import {
-  CalendarMinor,ClockMinor,CircleAlertMajor,DynamicSourceMinor, LockMinor, KeyMajor, ProfileMinor, PasskeyMinor,
+  CalendarMinor,ClockMinor,CircleAlertMajor,DynamicSourceMinor,DynamicSourceMajor, LockMinor, KeyMajor, ProfileMinor, PasskeyMinor,
   EmailMajor, CreditCardMajor, IdentityCardMajor, LocationsMinor,PhoneMajor, FileMinor, ImageMajor, BankMajor, HashtagMinor, 
-  ReceiptMajor, MobileMajor, CalendarTimeMinor, LocationMajor,  IdentityCardFilledMajor, CalendarMajor
+  ReceiptMajor, MobileMajor, CalendarTimeMinor, LocationMajor,  IdentityCardFilledMajor, CalendarMajor, AffiliateMajor
 } from '@shopify/polaris-icons';
 import { saveAs } from 'file-saver'
 import inventoryApi from "../apps/dashboard/pages/observe/api"
@@ -12,15 +12,62 @@ import homeFunctions from '../apps/dashboard/pages/home/module';
 import { tokens } from "@shopify/polaris-tokens" 
 import PersistStore from '../apps/main/PersistStore';
 
-import { circle_cancel, circle_tick_minor } from "@/apps/dashboard/components/icons";
+import { circle_cancel, circle_tick_minor, car_icon } from "@/apps/dashboard/components/icons";
+import quickStartFunc from '../apps/dashboard/pages/quick_start/transform';
+import { Box } from '@shopify/polaris';
+import TooltipText from '../apps/dashboard/components/shared/TooltipText';
+import { getMethod } from "../apps/dashboard/pages/observe/GetPrettifyEndpoint";
+import observeFunc from '../apps/dashboard/pages/observe/transform';
 
 const iconsUsedMap = {
   CalendarMinor,ClockMinor,CircleAlertMajor,DynamicSourceMinor, LockMinor, KeyMajor, ProfileMinor, PasskeyMinor,
-  EmailMajor, CreditCardMajor, IdentityCardMajor, LocationsMinor,PhoneMajor, FileMinor, ImageMajor, BankMajor, HashtagMinor, 
-  ReceiptMajor, MobileMajor, CalendarTimeMinor,LocationMajor, IdentityCardFilledMajor, CalendarMajor
+  EmailMajor, CreditCardMajor, IdentityCardMajor, LocationsMinor,PhoneMajor, FileMinor, ImageMajor, BankMajor, HashtagMinor,
+  ReceiptMajor, MobileMajor, CalendarTimeMinor,LocationMajor, IdentityCardFilledMajor, CalendarMajor, car_icon
+}
+
+const searchResultSections = {
+  collections: {
+    type: "collection",
+    title: "Collections",
+    icon: DynamicSourceMajor,
+    sectionPath: "/dashboard/observe/inventory/"
+  },
+  tests: {
+    type: "test",
+    title: "Tests",
+    icon: FileMinor,
+    sectionPath: "/dashboard/test-editor/"
+  },
+  connectors: {
+    type: "connector",
+    title: "Connectors",
+    icon: AffiliateMajor,
+    sectionPath: "/dashboard/quick-start"
+  },
+}
+
+const categoryMapping = {
+  "BOLA": { label: "API1:2023 Broken Object Level Authorization", url: "https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/" },
+  "BUA": { label: "API2:2023 Broken Authentication", url: "https://owasp.org/API-Security/editions/2023/en/0xa2-broken-authentication/" },
+  "EDE": { label: "API3:2023 Broken Object Property Level Authorization", url: "https://owasp.org/API-Security/editions/2023/en/0xa3-broken-object-property-level-authorization/" },
+  "MA": { label: "API3:2023 Broken Object Property Level Authorization", url: "https://owasp.org/API-Security/editions/2023/en/0xa3-broken-object-property-level-authorization/" },
+  "RL": { label: "API4:2023 Unrestricted Resource Consumption", url: "https://owasp.org/API-Security/editions/2023/en/0xa4-unrestricted-resource-consumption/" },
+  "BFLA": { label: "API5:2023 Broken Function Level Authorization", url: "https://owasp.org/API-Security/editions/2023/en/0xa5-broken-function-level-authorization/" },
+  "UASBF": { label: "API6:2023 Unrestricted Access to Sensitive Business Flows", url: "https://owasp.org/API-Security/editions/2023/en/0xa6-unrestricted-access-to-sensitive-business-flows/" },
+  "SSRF": { label: "API7:2023 Server Side Request Forgery", url: "https://owasp.org/API-Security/editions/2023/en/0xa7-server-side-request-forgery/" },
+  "SM": { label: "API8:2023 Security Misconfiguration", url: "https://owasp.org/API-Security/editions/2023/en/0xa8-security-misconfiguration/" },
+  "IAM": { label: "API9:2023 Improper Inventory Management", url: "https://owasp.org/API-Security/editions/2023/en/0xa9-improper-inventory-management/" },
+  "IIM": { label: "API9:2023 Improper Inventory Management", url: "https://owasp.org/API-Security/editions/2023/en/0xa9-improper-inventory-management/" },
+  "INJ": { label: "API10:2023 Unsafe Consumption of APIs", url: "https://owasp.org/API-Security/editions/2023/en/0xaa-unsafe-consumption-of-apis/" },
+  "LFI": { label: "API10:2023 Unsafe Consumption of APIs", url: "https://owasp.org/API-Security/editions/2023/en/0xaa-unsafe-consumption-of-apis/" },
+  "XSS": { label: "API10:2023 Unsafe Consumption of APIs", url: "https://owasp.org/API-Security/editions/2023/en/0xaa-unsafe-consumption-of-apis/" },
+  "SSTI": { label: "API10:2023 Unsafe Consumption of APIs", url: "https://owasp.org/API-Security/editions/2023/en/0xaa-unsafe-consumption-of-apis/" },
+  "CRLF": { label: "API10:2023 Unsafe Consumption of APIs", url: "https://owasp.org/API-Security/editions/2023/en/0xaa-unsafe-consumption-of-apis/" },
+  "CI": { label: "API10:2023 Unsafe Consumption of APIs", url: "https://owasp.org/API-Security/editions/2023/en/0xaa-unsafe-consumption-of-apis/" }
 }
 
 const func = {
+  categoryMapping: categoryMapping,
   setToast (isActive, isError, message) {
     Store.getState().setToastConfig({
           isActive: isActive,
@@ -36,6 +83,17 @@ const func = {
       res = data;
     }
     return res
+  },
+  capsSnakeToCamel(str) {
+    if (!str) return str;
+    if (str.includes("_")) {
+      return str
+        .toLowerCase()
+        .split('_')
+        .map((word, index) => index === 0 ? word : word.charAt(0).toUpperCase() + word.slice(1))
+        .join('');
+    }
+    return str;
   },
   nameValidationFunc(nameVal, initialCond){
     let error = ""
@@ -132,6 +190,30 @@ prettifyEpoch(epoch) {
 
     let plural = count <= 1 ? '' : 's'
     return count + ' ' + unit + plural + ' ago'
+  },
+  prettifyEpochDuration(diffSeconds) {
+    if(diffSeconds <= 0){
+      return "Error occurred while fetching the time"
+    }
+    const units = [
+      { label: "week", duration: 604800 },
+      { label: "day", duration: 86400 },
+      { label: "hour", duration: 3600 },
+      { label: "minute", duration: 60 },
+      { label: "second", duration: 1 }
+    ];
+
+    let result = [];
+
+    for (let unit of units) {
+      if (diffSeconds >= unit.duration) {
+        let value = Math.floor(diffSeconds / unit.duration);
+        diffSeconds %= unit.seconds;
+        result.push(`${value} ${unit.label}${value > 1 ? "s" : ""}`);
+      }
+    }
+
+    return result.join(", ")
   },
 
   toSentenceCase(str) {
@@ -316,19 +398,17 @@ prettifyEpoch(epoch) {
   getRunResultSubCategory(runResult, subCategoryFromSourceConfigMap, subCategoryMap, fieldName) {
     if (subCategoryMap[runResult.testSubType] === undefined) {
       let a = subCategoryFromSourceConfigMap[runResult.testSubType]
-      return a ? a.subcategory : null
-    } else {
-      return subCategoryMap[runResult.testSubType][fieldName]
+      return a ? a.subcategory : (runResult.testSubType ?? null)
     }
+    return subCategoryMap[runResult.testSubType][fieldName]
   },
 
   getRunResultCategory(runResult, subCategoryMap, subCategoryFromSourceConfigMap, fieldName) {
     if (subCategoryMap[runResult.testSubType] === undefined) {
       let a = subCategoryFromSourceConfigMap[runResult.testSubType]
-      return a ? a.category.shortName : null
-    } else {
-      return subCategoryMap[runResult.testSubType].superCategory[fieldName]
+      return a ? a.category.shortName : (runResult.testSuperType ?? null)
     }
+    return subCategoryMap[runResult.testSubType].superCategory[fieldName]
   },
 
   getRunResultSeverity(runResult, subCategoryMap) {
@@ -377,7 +457,12 @@ prettifyEpoch(epoch) {
   },
   epochToDateTime(timestamp) {
     var date = new Date(timestamp * 1000);
-    return date.toLocaleString('en-US',{timeZone: window.TIME_ZONE === 'Us/Pacific' ? 'America/Los_Angeles' : window.TIME_ZONE});
+
+    const timezone = (!window.TIME_ZONE || window.TIME_ZONE.trim() === '' || window.TIME_ZONE === 'Us/Pacific')
+    ? 'America/Los_Angeles'
+    : window.TIME_ZONE;
+
+    return date.toLocaleString('en-US',{timeZone: timezone});
   },
   getFormattedDate(epoch) {
     const date = new Date(epoch * 1000)
@@ -471,19 +556,25 @@ prettifyEpoch(epoch) {
   timeNow: () => {
     return parseInt(new Date().getTime() / 1000)
   },
+  // Check if API collections data caching is enabled for current account
+  isApiCollectionsCachingEnabled: () => {
+    const allowedAccounts = [1736798101, 1718042191];
+    return allowedAccounts.includes(window.ACTIVE_ACCOUNT);
+  },
   convertKeysToLowercase: function (obj){
     return Object.keys(obj).reduce((acc, k) => {
       acc[k.toLowerCase()] = obj[k];
       return acc;
     }, {});
   },
-  requestJson: function (message, highlightPaths) {
-
+  requestJson: function (message, highlightPaths, metadata = []) {
     if(!message || typeof message !== "object" || Object.keys(message).length === 0){
       return {}
     }
     let result = {}
     let requestHeaders = {}
+
+    const metaDataSet = new Set(metadata.map((x) => x.toLowerCase()))
 
     let requestHeadersString = "{}"
     let requestPayloadString = "{}"
@@ -515,6 +606,22 @@ prettifyEpoch(epoch) {
       // eat it
     }
 
+    Object.keys(requestHeaders).forEach((key) => {
+      if(metaDataSet.has(key)){
+        highlightPaths.push({
+            "highlightValue": {
+                "value": key,
+                "wholeRow": true,
+                "className": "akto-decoded",
+                "highlight": true,
+            },
+            "responseCode": -1,
+            "header": key,
+            "param": key,
+        })
+      }
+    })
+
     let requestPayload = {}
     try {
       requestPayload = JSON.parse(requestPayloadString)
@@ -543,7 +650,7 @@ prettifyEpoch(epoch) {
     }
     return result
   },
-  responseJson: function (message, highlightPaths) {
+  responseJson: function (message, highlightPaths, metadata = []) {
 
     if(!message || typeof message !== "object" || Object.keys(message).length === 0){
       return {}
@@ -552,6 +659,7 @@ prettifyEpoch(epoch) {
 
     let responseHeadersString = "{}"
     let responsePayloadString = "{}"
+    const metaDataSet = new Set(metadata.map((x) => x.toLowerCase()))
     if (message["request"]) {
       responseHeadersString = message["response"]["headers"] || "{}"
       responsePayloadString = message["response"]["body"] || "{}"
@@ -571,7 +679,23 @@ prettifyEpoch(epoch) {
       responsePayload = JSON.parse(responsePayloadString)
     } catch (e) {
       responsePayload = responsePayloadString
-    }
+    }    
+
+    Object.keys(responseHeaders).forEach((key) => {
+      if(metaDataSet.has(key)){
+        highlightPaths.push({
+            "highlightValue": {
+                "value": key,
+                "wholeRow": true,
+                "className": "akto-decoded",
+                "highlight": true,
+            },
+            "header": key,
+            "param": key,
+        })
+      }
+    })
+
     result["json"] = { "responseHeaders": responseHeaders, "responsePayload": responsePayload }
     result["highlightPaths"] = {}
     result['firstLine'] = func.responseFirstLine(message)
@@ -618,6 +742,36 @@ prettifyEpoch(epoch) {
 
     return collectionsObj
   },
+
+  mapCollectionIdToRegistryStatus(collections) {
+    let registryStatusObj = {}
+    collections.forEach((collection)=>{
+      if(!registryStatusObj[collection.id] && collection.registryStatus){
+        registryStatusObj[collection.id] = collection.registryStatus
+      }
+    })
+
+    return registryStatusObj
+  },
+
+  mapCollectionIdsToTagName(collections) {
+        const allTagCollectionsMap = {};
+              collections
+                .filter(col => !col.deactivated && Array.isArray(col.envType) && col.envType.length > 0)
+                .forEach(col => {
+                  col.envType.forEach(env => {
+                  const keyName = env && env.keyName && (env.keyName.startsWith('userSetEnvType') || env.keyName.startsWith('envType'))
+                    ? env.keyName.replace(/^(userSetEnvType|envType)/, 'env')
+                    : env.keyName;
+                    const key = `${keyName}=${env.value}`;
+                    if (!allTagCollectionsMap[key]) {
+                      allTagCollectionsMap[key] = [];
+                    }
+                    allTagCollectionsMap[key].push(col.id);
+                  });
+                });
+       return allTagCollectionsMap
+    },
   mapCollectionId(collections) {
     let collectionsObj = {}
     collections.forEach((collection)=>{
@@ -844,9 +998,24 @@ isObject(obj) {
   return obj !== null && typeof obj === 'object';
 },
 
-toMethodUrlString({method,url}){
+toMethodUrlString({method,url, shouldParse =false}){
+  if(shouldParse){
+    const finalMethod = getMethod(url, method);
+    const finalUrl = observeFunc.getTruncatedUrl(url);
+    return finalMethod + " " + finalUrl;
+  }
   return method + " " + url;
 },
+
+toMethodUrlApiCollectionIdString({ method, url, apiCollectionId, shouldParse = false }) {
+  if (shouldParse) {
+    const finalMethod = getMethod(url, method);
+    const finalUrl = observeFunc.getTruncatedUrl(url);
+    return finalMethod + " " + finalUrl + " " + apiCollectionId;
+  }
+  return method + " " + url + " " + apiCollectionId;
+},
+
 toMethodUrlObject(str){
 
   if(!str){
@@ -854,6 +1023,14 @@ toMethodUrlObject(str){
   }
 
   return {method:str.split(" ")[0], url:str.split(" ")[1]}
+},
+
+toMethodUrlApiCollectionIdObject(str){
+  if(!str){
+    return {method:"", url:"", apiCollectionId:0}  
+  }
+
+  return {method:str.split(" ")[0], url:str.split(" ")[1], apiCollectionId:str.split(" ")[2]}
 },
 validateMethod(methodName) {
   let m = methodName.toUpperCase()
@@ -884,15 +1061,18 @@ prepareValuesTooltip(x) {
 },
 
 parameterizeUrl(x) {
-  let re = /INTEGER|STRING|UUID/gi;
+  let re = /INTEGER|STRING|UUID|VERSIONED/gi;
   let newStr = x.replace(re, (match) => { 
       return "{param_" + match + "}";
   });
   return newStr
 },
-mergeApiInfoAndApiCollection(listEndpoints, apiInfoList, idToName) {
+mergeApiInfoAndApiCollection(listEndpoints, apiInfoList, idToName,apiInfoSeverityMap) {
   const allCollections = PersistStore.getState().allCollections
   const apiGroupsMap = func.mapCollectionIdToName(allCollections.filter(x => x.type === "API_GROUP"))
+  if(Object.keys(idToName).length === 0){
+    idToName = func.mapCollectionIdToName(allCollections)
+  }
 
   let ret = {}
   let apiInfoMap = {}
@@ -906,7 +1086,6 @@ mergeApiInfoAndApiCollection(listEndpoints, apiInfoList, idToName) {
           apiInfoMap[x["id"]["apiCollectionId"] + "-" + x["id"]["url"] + "-" + x["id"]["method"]] = x
       })
   }
-
   listEndpoints.forEach(x => {
       let key = x.apiCollectionId + "-" + x.url + "-" + x.method
       if (!ret[key]) {
@@ -930,11 +1109,16 @@ mergeApiInfoAndApiCollection(listEndpoints, apiInfoList, idToName) {
           let authTypeTag = authType.replace(",", "");
           let riskScore = apiInfoMap[key] ? apiInfoMap[key]?.riskScore : 0
           let responseCodesArr = apiInfoMap[key] ? apiInfoMap[key]?.responseCodes : [] 
-          let discoveredTimestamp = apiInfoMap[key] ? (apiInfoMap[key].discoveredTimestamp || apiInfoMap[key].startTs) : 0
-
+          let discoveredTimestamp = apiInfoMap[key] ? (apiInfoMap[key].discoveredTimestamp | apiInfoMap[key].startTs) : 0
+          if(discoveredTimestamp === 0){
+            discoveredTimestamp = x.startTs
+          }
+          let description = apiInfoMap[key] ? apiInfoMap[key]['description'] : ""
+          let lastSeenTs = Math.max(apiInfoMap[key] ? apiInfoMap[key]["lastSeen"] : (x.startTs > 0 ? x.startTs : 0), (x.startTs > 0 ? x.startTs : 0))
           ret[key] = {
               id: x.method + "###" + x.url + "###" + x.apiCollectionId + "###" + Math.random(),
               shadow: x.shadow ? x.shadow : false,
+              hostName: idToName ? (idToName[x.apiCollectionId] || '-') : '-',
               sensitive: x.sensitive,
               tags: x.tags,
               endpoint: x.url,
@@ -944,12 +1128,12 @@ mergeApiInfoAndApiCollection(listEndpoints, apiInfoList, idToName) {
               method: x.method,
               color: x.sensitive && x.sensitive.size > 0 ? "#f44336" : "#00bfa5",
               apiCollectionId: x.apiCollectionId,
-              last_seen: apiInfoMap[key] ? (this.prettifyEpoch(apiInfoMap[key]["lastSeen"])) : this.prettifyEpoch(x.startTs),
-              lastSeenTs: apiInfoMap[key] ? apiInfoMap[key]["lastSeen"] : x.startTs,
-              detectedTs: (x.startTs || discoveredTimestamp),
+              last_seen: this.prettifyEpoch(lastSeenTs),
+              lastSeenTs: lastSeenTs,
+              detectedTs: discoveredTimestamp === 0 ? x.startTs : discoveredTimestamp,
               changesCount: x.changesCount,
               changes: x.changesCount && x.changesCount > 0 ? (x.changesCount +" new parameter"+(x.changesCount > 1? "s": "")) : 'No new changes',
-              added: "Discovered " + this.prettifyEpoch(x.startTs || discoveredTimestamp),
+              added: this.prettifyEpoch(discoveredTimestamp),
               violations: apiInfoMap[key] ? apiInfoMap[key]["violations"] : {},
               apiCollectionName: idToName ? (idToName[x.apiCollectionId] || '-') : '-',
               auth_type: (authType || "no auth type found").toLowerCase(),
@@ -963,13 +1147,28 @@ mergeApiInfoAndApiCollection(listEndpoints, apiInfoList, idToName) {
               riskScore: riskScore,
               sensitiveInReq: [...this.convertSensitiveTags(x.sensitiveInReq)],
               sensitiveInResp: [...this.convertSensitiveTags(x.sensitiveInResp)],
-              responseCodes: responseCodesArr
+              responseCodes: responseCodesArr,
+              ...(apiInfoSeverityMap?.hasOwnProperty(key) ? { severityObj: apiInfoSeverityMap[key] } : {}),
+              sources: apiInfoMap[key]?apiInfoMap[key]['sources']:{},
+              description: description,
+              descriptionComp: (<Box maxWidth="300px"><TooltipText tooltip={description} text={description}/></Box>),
+              lastTested: apiInfoMap[key] ? apiInfoMap[key]["lastTested"] : 0,
+              isThreatEnabled: apiInfoMap[key] ? apiInfoMap[key]["threatScore"] > 0 : false,
           }
 
       }
   })
-  
   return Object.values(ret) 
+},
+getSeverityCountPerEndpointList(apiInfoSeverityMap){
+  if(!apiInfoSeverityMap) return {}
+  let apiInfoIdSeverityMap = {}
+  Object.entries(apiInfoSeverityMap).forEach(([key, value]) => {
+    let keyId = key.split(" ").join("-");
+    apiInfoIdSeverityMap[keyId] = value;
+
+  });
+  return apiInfoIdSeverityMap;
 },
 
 convertSensitiveTags(subTypeList) {
@@ -1259,20 +1458,122 @@ getDeprecatedEndpoints(apiInfoList, unusedEndpoints, apiCollectionId) {
           : dateRange.title;
   return dateStr
  },
+ createSearchResult(section, content, url) {
+  return {
+    content: content,
+    url: url, 
+    type: section.type,
+    icon: section.icon,
+    variant: 'menu',
+    truncate: true,
+  }
+ },
+ getCollectionsSearchItems(allCollections) {
+  const searchItems = []
 
- getSearchItemsArr(allRoutes,allCollections){
+  const activatedColections = allCollections.filter((collection) => collection.deactivated === false)
+  activatedColections.forEach((collection)=> {
+    const collectionUrl = searchResultSections.collections.sectionPath + collection.id
+    const searchResult = this.createSearchResult(
+      searchResultSections.collections,
+      collection.displayName, 
+      collectionUrl
+    )
+    searchItems.push(searchResult)
+  })
+  return searchItems
+ },
+ getTestSearchItems(allTests) {
+  const searchItems = []
+
+  // filter active tests
+  const activeTests = Object.values(allTests).filter((test) => test.inactive === false)
+
+  activeTests.forEach(test => {
+    const testUrl = searchResultSections.tests.sectionPath + test.name
+    const searchResult = this.createSearchResult(
+      searchResultSections.tests,
+      test.testName, 
+      testUrl,
+    )
+    searchItems.push(searchResult)
+  });
+
+  return searchItems
+ },
+ getConnectorSearchItems() {
+  const searchItems = []
+
+  const connectorCategories = quickStartFunc.getConnectorsListCategorized()
+
+  for (const categoryArr of Object.values(connectorCategories)) {
+      for (const connector of categoryArr) {
+        const connectorKey = connector.key?.toLowerCase() ?? "";
+        const connectorUrl = `${searchResultSections.connectors.sectionPath}?connector=${connectorKey}`
+        const searchResult = this.createSearchResult(
+          searchResultSections.connectors,
+          connector.label, 
+          connectorUrl,
+        )
+      searchItems.push(searchResult)
+      }
+  }
+
+  return searchItems
+ },
+ getSearchItemsArr(allCollections, subCategoryMap){
   let combinedArr = []
 
-  const activatedColections = allCollections.filter((item) => item.deactivated === false)
-
-  let initialStr = "/dashboard/observe/inventory/"
-
-  activatedColections.forEach((item)=> {
-    combinedArr.push({content: item.displayName, url: initialStr + item.id, type:'collection'})
-  })
+  const collectionsSearchItems = this.getCollectionsSearchItems(allCollections)
+  const testSearchItems = this.getTestSearchItems(subCategoryMap)
+  const connectorSearchItems = this.getConnectorSearchItems()
+  combinedArr.push(...collectionsSearchItems, ...testSearchItems, ...connectorSearchItems)
 
   return combinedArr
  },
+ createSearchResultsSection(section, filteredItemsArr, handleNavigateSearch) {
+    const SECTION_ITEMS_MAX_COUNT = 10
+    const filteredSectionItems = filteredItemsArr.filter(sectionItem => sectionItem.type === section.type)
+    const filteredSectionResults = filteredSectionItems
+      .slice(0, SECTION_ITEMS_MAX_COUNT)
+      .map(({ url, ...sectionItem }) => ({ ...sectionItem, onAction: () => handleNavigateSearch(url) }));
+    
+    if (filteredSectionItems.length > SECTION_ITEMS_MAX_COUNT) {
+      const { url, ...moreResult } = this.createSearchResult(
+        searchResultSections.collections,
+        `+${filteredSectionItems.length - SECTION_ITEMS_MAX_COUNT} more`,
+        section.sectionPath
+      );
+
+      moreResult.onAction = () => handleNavigateSearch(section.sectionPath);
+      moreResult.icon = ''
+      filteredSectionResults.push(moreResult)
+    }
+
+    if (filteredSectionResults.length === 0) return null
+    else {
+      return { title: section.title, items: filteredSectionResults }
+    }
+},
+ getSearchResults(filteredItemsArr, handleNavigateSearch) {
+  const collectionsSection = this.createSearchResultsSection(searchResultSections.collections, filteredItemsArr, handleNavigateSearch)
+  const testsSection = this.createSearchResultsSection(searchResultSections.tests, filteredItemsArr, handleNavigateSearch)
+  const connectorsSection = this.createSearchResultsSection(searchResultSections.connectors, filteredItemsArr, handleNavigateSearch)
+
+  const allSections = [ collectionsSection, testsSection, connectorsSection ].filter(section => section !== null)
+
+  return allSections
+ },
+
+updateQueryParams(searchParams, setSearchParams, key, value) {
+  const newSearchParams = new URLSearchParams(searchParams);
+  if (value === "") {
+      newSearchParams.delete(key)
+  } else {
+      newSearchParams.set(key, value);
+  }
+  setSearchParams(newSearchParams);
+},
  getComplianceIcon: (complianceName) => {
   return "/public/"+complianceName.toUpperCase()+".svg";
 },
@@ -1316,6 +1617,13 @@ mapCollectionIdToHostName(apiCollections){
 
     return collectionsObj
 },
+joinWordsWithUnderscores(input) {
+    if (!input ) return "";
+    const words = input.trim().split(/\s+/);
+    const result = words.map(word => word).join('_');
+
+    return result.toUpperCase();
+  },
   getTimeTakenByTest(startTimestamp, endTimestamp){
     const timeDiff = Math.abs(endTimestamp - startTimestamp);
     const hours = Math.floor(timeDiff / 3600);
@@ -1489,7 +1797,9 @@ mapCollectionIdToHostName(apiCollections){
           return CalendarMinor;
         case "BIRTH":
           return CalendarTimeMinor;
-        default: 
+        case "VIN":
+          return car_icon;
+        default:
           return KeyMajor;
     }
   },
@@ -1570,19 +1880,12 @@ mapCollectionIdToHostName(apiCollections){
     })
     return url;
   },
-  async refreshApiCollections() {
-    let apiCollections = await homeFunctions.getAllCollections()
-    const allCollectionsMap = func.mapCollectionIdToName(apiCollections)
-
-    PersistStore.getState().setAllCollections(apiCollections);
-    PersistStore.getState().setCollectionsMap(allCollectionsMap);
-  },
   transformString(inputString) {
     let transformedString = inputString.replace(/^\//, '').replace(/\/$/, '').replace(/#$/, '');
     const segments = transformedString.split('/');
     for (let i = 0; i < segments.length; i++) {
         // Check if the segment is alphanumeric
-        if (/^[0-9a-fA-F]+$/.test(segments[i]) || /^[0-9]+$/.test(segments[i])) {
+        if (/^-?[0-9a-fA-F]+$/.test(segments[i]) || /^-?[0-9]+$/.test(segments[i])) {
         segments[i] = 'id';
         }
     }
@@ -1627,7 +1930,8 @@ showConfirmationModal(modalContent, primaryActionContent, primaryAction) {
     tableTabs.forEach((tab,ind) => {
       const tabId = this.getKeyFromName(tab)
       const tabKey = baseUrl + tabId
-      const count = currentState[tabKey] || data[tabId]?.length || initialCountArr[ind] || 0
+      // Check _counts first (for accurate counts with memory optimization), then fall back to array length
+      const count = currentState[tabKey] || data._counts?.[tabId] || data[tabId]?.length || initialCountArr[ind] || 0
       finalCountObj[tabId] = count
     })
 
@@ -1692,9 +1996,8 @@ showConfirmationModal(modalContent, primaryActionContent, primaryAction) {
   checkForFeatureSaas(featureLabel) {
     const stiggFeatures = window.STIGG_FEATURE_WISE_ALLOWED
     let access = false;
-    if (!stiggFeatures || Object.keys(stiggFeatures).length === 0) {
-      // for feature map not present, no access. For saas only.
-      access = false;
+    if (!stiggFeatures || Object.keys(stiggFeatures).length === 0 ) {
+      access = this.checkOnPrem()
     } else if (stiggFeatures && stiggFeatures[featureLabel]) {
       access = stiggFeatures[featureLabel].isGranted
     }
@@ -1735,6 +2038,23 @@ showConfirmationModal(modalContent, primaryActionContent, primaryAction) {
   getAktoSeverities(){
     return ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']
   },
+  getAktoSeveritiesInitMap(initArr = false) {
+    const aktoSeverities = this.getAktoSeverities()
+    const severitiesMap = aktoSeverities.reduce((acc, curr) => {
+      acc[curr] = initArr ? [] : 0
+      return acc
+    }, {})
+    return severitiesMap
+  },
+  getSelectedItemsText(selectedItem) {
+    if (!Array.isArray(selectedItem) || selectedItem?.length === 0) return "";
+  
+    if (selectedItem.length === 1) return selectedItem[0];
+  
+    const allButLast = selectedItem.slice(0, -1).join(", ");
+    const last = selectedItem[selectedItem.length - 1];
+    return `${allButLast} & ${last}`;
+  },  
 
   getIconFromString(iconString){
     if(iconsUsedMap[iconString] !== undefined){
@@ -1887,9 +2207,249 @@ showConfirmationModal(modalContent, primaryActionContent, primaryAction) {
       })} ${timeStr}`;
   },
   isDemoAccount(){
-    return window.ACTIVE_ACCOUNT === 1669322524
-  }
+     return window.ACTIVE_ACCOUNT === 1669322524
+  },
 
+  shouldShowIpReputation() {
+    return this.isDemoAccount() || window.ACTIVE_ACCOUNT === 1767812031 || window.ACTIVE_ACCOUNT === 1767814409
+  },
+
+  
+  isSameDateAsToday (givenDate) {
+      const today = new Date();
+      return (
+          givenDate.getUTCFullYear() === today.getUTCFullYear() &&
+          givenDate.getUTCMonth() === today.getUTCMonth() &&
+          givenDate.getDate() === today.getDate()
+      );
+  },
+  getStartOfTodayEpoch() {
+    const now = new Date();
+    return Math.floor(this.getStartOfTodayDate().getTime() / 1000);
+  },
+  getStartOfTodayDate(){
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  },
+  getStartOfDay(now) {
+    try {
+      return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    } catch(e){
+      return this.getStartOfTodayDate();
+    }
+  },
+  getStartOfDayEpoch(now) {
+    return Math.floor(this.getStartOfDay(now).getTime() / 1000);
+  },
+  getDayOfWeek(time){
+    const temp = new Date(time * 1000);
+    switch(temp.getDay()){
+      case 1:
+        return "Monday"
+      case 2:
+        return "Tuesday"
+      case 3:
+        return "Wednesday"
+      case 4: 
+        return "Thursday"
+      case 5:
+        return "Friday"
+      case 6: 
+        return "Saturday"
+      default:
+        return "Sunday"
+    }
+  },
+  getHourFromEpoch(time) {
+    try {
+      let date = new Date(time * 1000);
+      let hours = date.getHours();
+      return hours;
+    } catch (e) {
+      return 0;
+    }
+  },
+  getFormattedHoursUsingLabel(hour, labels, defaultLabel) {
+    let hourLabel = hour === 12 ? "noon" : (
+      hour === 0 ? "midnight" : (
+        hour < 13 ? "am" : "pm"
+      )
+    )
+    let hourValue = hour == 0 ? 24 : hour
+
+    let filtered = labels.filter((x) => {
+      return x.value == hourValue && x.label.includes(hourLabel)
+    })
+
+    if (filtered.length == 1) {
+      return filtered[0]
+    }
+    return defaultLabel
+  },
+  formatCollectionType(type) {
+    return (type?.keyName?.replace(/^(userSetEnvType|envType)/, 'env')?.slice(0, 50) ?? '') + '=' + (type?.value?.slice(0, 50) ?? '')
+  },
+  getRecurringContext(periodInSeconds) {
+    if (periodInSeconds === 86400) return "Daily"
+    else if (periodInSeconds === (86400 * 30)) return "Monthly"
+    else if (periodInSeconds === (86400 * 7)) return "Weekly"
+    else if (periodInSeconds === -1) return "Continuously"
+    else return "Once"
+  },
+  getRunTypeLabel(runType, periodInSeconds) {
+    if (!runType || runType === "CI_CD" || runType === "ONE_TIME") return "Once";
+    else if (runType === "RECURRING") return this.getRecurringContext(periodInSeconds)
+    else if (runType === "CONTINUOUS_TESTING") return "Continuously";
+  },
+  getPriorityStatus (priority) {
+    switch (priority) {
+      case 'P0':
+        return 'critical-strong-experimental';
+      case 'P1':
+        return 'critical';
+      case 'P2':
+        return 'attention';
+      case 'P3':
+        return 'warning';
+      case 'P4':
+        return 'info';
+      case 'P5':
+        return 'success';
+      default:
+        return 'new';
+    }
+  },
+  // Category priority helpers: mcp > agentic > llm > others
+  getCategoryPriority(name){
+    const lower = (name || '').toLowerCase();
+    if (lower.includes('mcp')) return 0;
+    if (lower.includes('agentic')) return 1;
+    if (lower.includes('llm')) return 2;
+    return 3;
+  },
+  // Generic sorter: accepts array of strings or objects. If objects, pass a key string or a getter fn.
+  sortByCategoryPriority(items, keyOrGetter){
+    if(!Array.isArray(items)) return items;
+    const getName = typeof keyOrGetter === 'function'
+      ? keyOrGetter
+      : (item) => {
+          if (typeof item === 'string') return item;
+          const key = keyOrGetter || 'name';
+          return item?.[key];
+        };
+    return [...items].sort((a,b)=>{
+      const nameA = getName(a);
+      const nameB = getName(b);
+      const pA = this.getCategoryPriority(nameA);
+      const pB = this.getCategoryPriority(nameB);
+      if(pA !== pB) return pA - pB;
+      return (nameA || '').localeCompare(nameB || '');
+    })
+  },
+
+   isWhiteListedOrganization(){
+      return window.USER_NAME.indexOf("@akto.io")>0 || window.USER_NAME.indexOf("@lab.morganstanley.com")>0
+       || window.USER_NAME.indexOf("@blinkrx.com")>0 || window.USER_NAME.indexOf("@testmuai.com")> 0 || window.USER_NAME.indexOf("@aktosecurity.com")>0 ;
+    },
+
+    isTempAccount(){
+      if (!window?.USER_NAME) return false;
+      
+      const userName = window.USER_NAME.toLowerCase();
+      const tempAccountOrganizations = ['chargebee', 'miq', 'whatfix', 'blinkrx' , 'blinkhealth'];
+      
+      return tempAccountOrganizations.some(org => userName.includes(org));
+    },
+
+  isLimitedAccount(){
+    return window?.ACTIVE_ACCOUNT === 1753372418
+  },
+  /**
+   * Validates if a string is a valid URL with http or https protocol
+   * @param {string} url - The URL string to validate
+   * @returns {boolean} True if valid URL, false otherwise
+   */
+  validateUrl: function(url) {
+    if (!url) return false;
+    const urlPattern = /^https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)$/;
+    return urlPattern.test(url);
+  },
+  /**
+   * Find all placeholder positions in a text string (e.g., {}, {var}, {variable})
+   * Returns an array of objects with start, end, and phrase properties for highlighting
+   * @param {string} text - The text to search for placeholders
+   * @returns {Array} Array of placeholder objects with {start, end, phrase}
+   */
+  findPlaceholders: function(text) {
+    if (!text) return [];
+    const placeholders = [];
+    // Find all individual {} pairs, including overlapping ones like {{}}
+    // We search from each position to find the nearest closing brace
+    for (let i = 0; i < text.length; i++) {
+      if (text[i] === '{') {
+        // Find the nearest matching closing brace
+        let depth = 1;
+        for (let j = i + 1; j < text.length && depth > 0; j++) {
+          if (text[j] === '{') {
+            depth++;
+          } else if (text[j] === '}') {
+            depth--;
+            if (depth === 0) {
+              // Found a complete placeholder
+              const placeholder = text.substring(i, j + 1);
+              placeholders.push({
+                start: i,
+                end: j + 1,
+                phrase: placeholder
+              });
+              break; // Found the match for this opening brace, move on
+            }
+          }
+        }
+      }
+    }
+    return placeholders;
+  },
+  /**
+   * Format timestamp for chat messages
+   * @param {number} timestamp - Unix timestamp in seconds
+   * @returns {string} Formatted timestamp string
+   */
+  formatChatTimestamp: (timestamp) => {
+    if (!timestamp) return '';
+    return new Date(timestamp * 1000).toLocaleString('en-US', {
+      month: 'numeric',
+      day: 'numeric',
+      year: '2-digit',
+      hour: 'numeric',
+      minute: 'numeric',
+      hour12: true
+    });
+  },
+  extractEmailDetails(email) {
+    // Define the regex pattern
+    const pattern = /^(.*?)@([\w.-]+)\.[a-z]{2,}$/;
+  
+    // Match the regex pattern
+    const match = email.match(pattern);
+  
+    if (match) {
+      let rawUsername = match[1]; // Extract username
+      let mailserver = match[2]; // Extract mailserver (including subdomains)
+  
+      let username = rawUsername
+      .split(/[^a-zA-Z]+/) // Split by any non-alphabet character
+      .filter(Boolean) // Remove empty segments
+      .map(segment => segment.charAt(0).toUpperCase() + segment.slice(1)) // Capitalize each segment
+      .join(' '); // Join segments with a space
+          
+      mailserver = mailserver.charAt(0).toUpperCase() + mailserver.slice(1);
+  
+      return { username, mailserver };
+    } else {
+      return { error: "Invalid email format" };
+    }
+  }
 }
 
 export default func

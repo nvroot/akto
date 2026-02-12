@@ -52,7 +52,7 @@ public class CodeAnalysisAction extends UserAction {
     private CodeAnalysisRepo.SourceCodeType sourceCodeType;
     public static final int MAX_BATCH_SIZE = 100;
 
-    private static final LoggerMaker loggerMaker = new LoggerMaker(CodeAnalysisAction.class);
+    private static final LoggerMaker loggerMaker = new LoggerMaker(CodeAnalysisAction.class, LogDb.DASHBOARD);;
     private static final ScheduledExecutorService executorService = Executors.newSingleThreadScheduledExecutor();
 
     public void sendMixpanelEvent() {
@@ -101,7 +101,7 @@ public class CodeAnalysisAction extends UserAction {
     }
     
     public String syncExtractedAPIs() {
-        loggerMaker.infoAndAddToDb("Syncing code analysis endpoints for collection: " + apiCollectionName, LogDb.DASHBOARD);
+        loggerMaker.debugAndAddToDb("Syncing code analysis endpoints for collection: " + apiCollectionName, LogDb.DASHBOARD);
 
         if (codeAnalysisApisList == null) {
             loggerMaker.errorAndAddToDb("Code analysis api's list is null", LogDb.DASHBOARD);
@@ -126,9 +126,8 @@ public class CodeAnalysisAction extends UserAction {
         // todo:  If API collection does exist, create it
         ApiCollection apiCollection = ApiCollectionsDao.instance.findByName(apiCollectionName);
         if (apiCollection == null) {
-            loggerMaker.errorAndAddToDb("API collection not found " + apiCollectionName, LogDb.DASHBOARD);
-            addActionError("API collection not found: " + apiCollectionName);
-            return ERROR.toUpperCase();
+            apiCollection = new ApiCollection(Context.now(), apiCollectionName, Context.now(), new HashSet<>(), null, 0, false, false);
+            ApiCollectionsDao.instance.insertOne(apiCollection);
         }
 
         /*
@@ -143,7 +142,14 @@ public class CodeAnalysisAction extends UserAction {
          * GET /books/INTEGER -> GET /books/AKTO_TEMPLATE_STR
          * POST /city/STRING/district/INTEGER -> POST /city/AKTO_TEMPLATE_STR/district/AKTO_TEMPLATE_STR
          */
-        List<BasicDBObject> trafficApis = Utils.fetchEndpointsInCollectionUsingHost(apiCollection.getId(), 0);
+       List<BasicDBObject> trafficApis = new ArrayList<>();
+        if (apiCollection.getHostName() != null && !apiCollection.getHostName().isEmpty()) {
+            // If the api collection has a host name, fetch traffic endpoints using the host name
+            trafficApis = ApiCollectionsDao.fetchEndpointsInCollectionUsingHost(apiCollection.getId(), 0, false);
+        } else {
+            // If the api collection does not have a host name, fetch traffic endpoints without host name
+            trafficApis = ApiCollectionsDao.fetchEndpointsInCollection(apiCollection.getId(), 0, -1, 60 * 24 * 60 * 60);
+        }
         Map<String, String> trafficApiEndpointAktoTemplateStrToOriginalMap = new HashMap<>();
         List<String> trafficApiKeys = new ArrayList<>();
         for (BasicDBObject trafficApi: trafficApis) {
@@ -337,8 +343,8 @@ public class CodeAnalysisAction extends UserAction {
             }
         }
 
-        loggerMaker.infoAndAddToDb("Updated code analysis collection: " + apiCollectionName, LogDb.DASHBOARD);
-        loggerMaker.infoAndAddToDb("Source code endpoints count: " + codeAnalysisApisMap.size(), LogDb.DASHBOARD);
+        loggerMaker.debugAndAddToDb("Updated code analysis collection: " + apiCollectionName, LogDb.DASHBOARD);
+        loggerMaker.debugAndAddToDb("Source code endpoints count: " + codeAnalysisApisMap.size(), LogDb.DASHBOARD);
 
         // Send mixpanel event
         int accountId = Context.accountId.get();

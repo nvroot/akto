@@ -21,11 +21,11 @@ const testEditorRequests = {
         })
     },
     
-    runTestForTemplate(content, apiInfoKey, sampleDataList) {
+    runTestForTemplate(content, apiInfoKey, sampleDataList, testRoleId) {
         return request({
             url: '/api/runTestForGivenTemplate',
             method: 'post',
-            data:{content, apiInfoKey, sampleDataList}
+            data:{content, apiInfoKey, sampleDataList, testRoleId}
         })
     },
 
@@ -57,8 +57,16 @@ const testEditorRequests = {
                 originalTestId: testId,
             }
         })
+    },
+    async fetchTestingRunPlaygroundStatus(hexId){
+        return await request({
+            url: '/api/fetchTestingRunPlaygroundStatus',
+            method: 'post',
+            data:{
+                testingRunPlaygroundHexId:hexId
+            }
+        })
     }
-
 }
 
 export default testEditorRequests

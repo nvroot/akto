@@ -6,6 +6,7 @@ import PersistStore from '../../../../main/PersistStore'
 import { Box, Button, Popover, Text } from '@shopify/polaris'
 import { useNavigate } from 'react-router-dom'
 import LocalStore from '../../../../main/LocalStorageStore'
+import { getDashboardCategory, mapLabel } from '../../../../main/labelHelper'
 
 function SelectCollectionComponent() {
     const [popoverActive, setPopoverActive] = useState(false)
@@ -46,7 +47,7 @@ function SelectCollectionComponent() {
     )
 }
 
-function TestrunsBannerComponent({isInventory,onButtonClick}) {
+function TestrunsBannerComponent({isInventory,onButtonClick, disabled=false}) {
     const allCollections = PersistStore(state => state.allCollections);
     let urlsCount = 0
     allCollections.filter(x => x.type !== "API_GROUP")
@@ -55,18 +56,19 @@ function TestrunsBannerComponent({isInventory,onButtonClick}) {
         )
 
     const subCategoryMap = LocalStore.getState().subCategoryMap;
-    let defaultCount = Math.max(Object.keys(subCategoryMap).length,850);
+    let defaultCount = Math.max(Object.keys(subCategoryMap).length,1000);
     defaultCount = Math.floor(defaultCount / 50) * 50
     return (
         <BannerLayout
-            title={"Test your APIs"}
-            text={defaultCount + "+ built-in tests covering OWASP Top 10, HackerOne top 10 and all the business logic vulnerabilities for your API Security testing needs."}
+            title={`${mapLabel("Test your APIs", getDashboardCategory())}`}
+            text={defaultCount + `+ built-in tests covering OWASP Top 10, HackerOne top 10 and all the business logic vulnerabilities for your ${mapLabel("API Security testing", getDashboardCategory())} needs.`}
             videoLength={TESTING_VIDEO_LENGTH}
             // videoLink={TESTING_VIDEO_URL}
             videoThumbnail={TESTING_VIDEO_THUMBNAIL}
             bodyComponent={isInventory ? null :<SelectCollectionComponent /> }
-            {...isInventory ? {buttonText: "Run test"}: {}}
-            {...isInventory ? {onClick: () => onButtonClick()} : {}}
+            disabled={disabled}
+            {...isInventory ? {buttonText: mapLabel("Run test", getDashboardCategory()), disabled:disabled}: {}}
+            {...isInventory ? {onClick: () => onButtonClick(), disabled:disabled} : {}}
             {...urlsCount === 0 ? {buttonText: "Go to inventory"}: {}} 
             {...urlsCount === 0 ? {buttonUrl: "/dashboard/observe/inventory"}: {}} 
         />

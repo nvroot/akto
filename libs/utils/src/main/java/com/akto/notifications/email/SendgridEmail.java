@@ -1,10 +1,8 @@
 package com.akto.notifications.email;
 
-import com.akto.dao.ConfigsDao;
-import com.akto.dao.context.Context;
-import com.akto.dto.Config;
+import com.akto.dto.test_editor.YamlTemplate;
+import com.akto.notifications.data.TestingAlertData;
 import com.akto.onprem.Constants;
-import com.mongodb.client.model.Filters;
 import com.sendgrid.Method;
 import com.sendgrid.Request;
 import com.sendgrid.Response;
@@ -13,10 +11,17 @@ import com.sendgrid.helpers.mail.Mail;
 import com.sendgrid.helpers.mail.objects.Content;
 import com.sendgrid.helpers.mail.objects.Email;
 import com.sendgrid.helpers.mail.objects.Personalization;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.apache.commons.lang3.StringUtils;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 public class SendgridEmail {
 
@@ -24,6 +29,35 @@ public class SendgridEmail {
 
     private SendgridEmail() {}
     private static final SendgridEmail sendgridEmail = new SendgridEmail();
+
+    private void buildMailBasic(String inviteeName, String inviteeEmail, Mail mail, Personalization personalization, String subject, String templateId, boolean isHtml) {
+
+        Email fromEmail = new Email();
+        fromEmail.setName("Ankita");
+        fromEmail.setEmail("ankita.gupta@akto.io");
+        mail.setFrom(fromEmail);
+        if(StringUtils.isNotBlank(subject)) {
+            personalization.setSubject(subject);
+        }
+        Email to = new Email();
+        if(StringUtils.isNotBlank(inviteeName)) {
+            to.setName(inviteeName);
+        }
+        
+        to.setEmail(inviteeEmail);
+        personalization.addTo(to);
+        mail.addPersonalization(personalization);
+        mail.setTemplateId(templateId);
+
+        Content content = new Content();
+        if(!isHtml){
+            content.setType("text/plain"); 
+        }else {
+            content.setType("text/html");
+        }
+        content.setValue("Hello,");
+        mail.addContent(content);
+    }
 
     public static SendgridEmail getInstance() {
         return sendgridEmail;
@@ -38,28 +72,8 @@ public class SendgridEmail {
             int accounts
     ) {
         Mail mail = new Mail();
-
-        Email fromEmail = new Email();
-        fromEmail.setName("Ankita");
-        fromEmail.setEmail("ankita.gupta@akto.io");
-        mail.setFrom(fromEmail);
-
         Personalization personalization = new Personalization();
-        Email to = new Email();
-        to.setName(adminName);
-        to.setEmail(adminEmail);
-        personalization.addTo(to);
-        //personalization.setSubject("Welcome to Akto");
-        mail.addPersonalization(personalization);
-
-        Content content = new Content();
-        content.setType("text/html");
-        content.setValue("Hello");
-        mail.addContent(content);
-
-        mail.setTemplateId("d-64cefe02855e48fa9b4dd0a618e38569");
-
-
+        buildMailBasic(adminName, adminEmail, mail, personalization, null, "d-64cefe02855e48fa9b4dd0a618e38569", true);
         personalization.addDynamicTemplateData("apis",apis +"");
         personalization.addDynamicTemplateData("testRuns",testRuns + "");
         personalization.addDynamicTemplateData("customTemplates",customTemplates +"");
@@ -74,30 +88,8 @@ public class SendgridEmail {
             String invitiationUrl
     ) {
         Mail mail = new Mail();
-
-        Email fromEmail = new Email();
-        fromEmail.setName("Ankita");
-        fromEmail.setEmail("ankita.gupta@akto.io");
-        mail.setFrom(fromEmail);
-
-        //mail.setSubject("Welcome to Akto");
-
         Personalization personalization = new Personalization();
-        Email to = new Email();
-        to.setName(inviteeName);
-        to.setEmail(inviteeEmail);
-        personalization.addTo(to);
-        //personalization.setSubject("Welcome to Akto");
-        mail.addPersonalization(personalization);
-
-        Content content = new Content();
-        content.setType("text/html");
-        content.setValue("Hello");
-        mail.addContent(content);
-
-        mail.setTemplateId("d-ffe7d4ec96154b5d84e24816893161c7");
-
-
+        buildMailBasic(inviteeName, inviteeEmail, mail, personalization, null, "d-ffe7d4ec96154b5d84e24816893161c7", true);
         personalization.addDynamicTemplateData("inviteFrom",inviteFrom);
         personalization.addDynamicTemplateData("inviteeName",inviteeName);
         personalization.addDynamicTemplateData("orgName",extractOrgName(inviteFrom));
@@ -106,27 +98,135 @@ public class SendgridEmail {
         return mail;
     }
 
+    private void buildTemplateWithYamlTemplates(Personalization personalization, Map<String, YamlTemplate> yamlTemplates, Map<String, Integer> apisAffectedCount) {
+        if (yamlTemplates == null || apisAffectedCount == null || yamlTemplates.isEmpty() || apisAffectedCount.isEmpty()) {
+            personalization.addDynamicTemplateData("findings", new ArrayList<>());
+            return;
+        }
+
+        List<Map<String, Object>> findings = new ArrayList<>();
+        
+        for(Map.Entry<String, Integer> entry : apisAffectedCount.entrySet()) {
+            String template = entry.getKey();
+            int apisAffected = entry.getValue();
+            YamlTemplate yamlTemplate = yamlTemplates.get(template);
+            
+            if (yamlTemplate == null || yamlTemplate.getInfo() == null) {
+                continue;
+            }
+            
+            String issueName = yamlTemplate.getInfo().getName();
+            if (StringUtils.isBlank(issueName)) {
+                issueName = template;
+            }
+            
+            String description = yamlTemplate.getInfo().getDescription();
+            if (StringUtils.isBlank(description)) {
+                description = "-";
+            }
+            
+            String severity = yamlTemplate.getInfo().getSeverity();
+            if (StringUtils.isBlank(severity)) {
+                severity = "-";
+            } else {
+                severity = severity.toUpperCase();
+            }
+            
+            String categoryName = "-";
+            if (yamlTemplate.getInfo().getCategory() != null) {
+                String displayName = yamlTemplate.getInfo().getCategory().getDisplayName();
+                String shortName = yamlTemplate.getInfo().getCategory().getShortName();
+                if (StringUtils.isNotBlank(displayName)) {
+                    categoryName = displayName;
+                    if (StringUtils.isNotBlank(shortName)) {
+                        categoryName += " (" + shortName + ")";
+                    }
+                } else if (StringUtils.isNotBlank(yamlTemplate.getInfo().getCategory().getName())) {
+                    categoryName = yamlTemplate.getInfo().getCategory().getName();
+                }
+            }
+            
+            Map<String, Object> finding = new HashMap<>();
+            finding.put("issueName", issueName);
+            finding.put("description", description);
+            finding.put("apisAffected", apisAffected);
+            finding.put("category", categoryName);
+            finding.put("severity", severity);
+            
+            // Add boolean flags for severity to use in Handlebars conditionals
+            finding.put("isCritical", "CRITICAL".equals(severity));
+            finding.put("isHigh", "HIGH".equals(severity));
+            finding.put("isMedium", "MEDIUM".equals(severity));
+            finding.put("isLow", "LOW".equals(severity));
+            finding.put("isUnknown", "-".equals(severity));
+            
+            findings.add(finding);
+        }
+        
+        // Sort findings by severity: CRITICAL -> HIGH -> MEDIUM -> LOW -> Unknown
+        findings.sort(Comparator.comparingInt(finding -> getSeverityOrder((String) finding.get("severity"))));
+        
+        // Update serial numbers after sorting
+        int serialNumber = 1;
+        for (Map<String, Object> finding : findings) {
+            finding.put("sno", serialNumber++);
+        }
+        
+        personalization.addDynamicTemplateData("findings", findings);
+    }
+    
+    /**
+     * Returns the order value for severity sorting.
+     * Lower values are sorted first.
+     * Order: CRITICAL (1) -> HIGH (2) -> MEDIUM (3) -> LOW (4) -> Unknown (5)
+     */
+    private int getSeverityOrder(String severity) {
+        if (StringUtils.isBlank(severity) || "-".equals(severity)) {
+            return 5; // Unknown severity at the bottom
+        }
+        
+        switch (severity.toUpperCase()) {
+            case "CRITICAL":
+                return 1;
+            case "HIGH":
+                return 2;
+            case "MEDIUM":
+                return 3;
+            case "LOW":
+                return 4;
+            default:
+                return 5; // Unknown severity at the bottom
+        }
+    }
+
+    public Mail buildTestingRunResultsEmail(TestingAlertData data, String email, String aktoUrl, String userName, Map<String, Integer> apisAffectedCount, Map<String, YamlTemplate> yamlTemplates) {
+        Mail mail = new Mail(); 
+        Personalization personalization = new Personalization();
+        String templateId = "d-e6ec36c175564acf844c95a704a3051e";
+
+        buildMailBasic(userName, email, mail, personalization, "Akto test results summary", templateId, true);
+        personalization.addDynamicTemplateData("title", data.getTitle());
+        personalization.addDynamicTemplateData("critical", String.valueOf(data.getCritical()));
+        personalization.addDynamicTemplateData("high", String.valueOf(data.getHigh()));
+        personalization.addDynamicTemplateData("medium", String.valueOf(data.getMedium()));
+        personalization.addDynamicTemplateData("low", String.valueOf(data.getLow()));
+        personalization.addDynamicTemplateData("newIssues", String.valueOf(data.getNewIssues()));
+        personalization.addDynamicTemplateData("vulnerableApis", String.valueOf(data.getVulnerableApis()));
+        personalization.addDynamicTemplateData("totalApis", String.valueOf(data.getTotalApis()));
+        personalization.addDynamicTemplateData("collection", data.getCollection());
+        personalization.addDynamicTemplateData("scanTimeInSeconds", String.valueOf(data.getScanTimeInSeconds()));
+        personalization.addDynamicTemplateData("viewOnAktoURL", aktoUrl);
+        
+        // Build and add findings table
+        buildTemplateWithYamlTemplates(personalization, yamlTemplates, apisAffectedCount);
+        
+        return mail;
+    }
+
     public Mail buildPasswordResetEmail(String email, String passwordResetTokenUrl) {
         Mail mail = new Mail();
-
-        Email fromEmail = new Email();
-        fromEmail.setName("Ankita");
-        fromEmail.setEmail("ankita.gupta@akto.io");
-        mail.setFrom(fromEmail);
-
         Personalization personalization = new Personalization();
-        Email to = new Email();
-        to.setEmail(email);
-        personalization.addTo(to);
-        mail.addPersonalization(personalization);
-
-        Content content = new Content();
-        content.setType("text/html");
-        content.setValue("Hello,");
-        mail.addContent(content);
-
-        mail.setTemplateId("d-266210cb361b4b659289a72aef04edfa");
-
+        buildMailBasic( null, email, mail, personalization, null, "d-266210cb361b4b659289a72aef04edfa", true);
         personalization.addDynamicTemplateData("aktoUrl", passwordResetTokenUrl);
         personalization.addDynamicTemplateData("supportEmail", "support@akto.io");
 

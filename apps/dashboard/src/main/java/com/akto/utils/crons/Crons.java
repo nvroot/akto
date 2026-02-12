@@ -15,7 +15,6 @@ import com.akto.dto.HistoricalData;
 import com.akto.listener.InitializerListener;
 import com.akto.log.LoggerMaker;
 
-import com.akto.task.Cluster;
 import org.bson.conversions.Bson;
 import org.bson.types.ObjectId;
 
@@ -61,9 +60,9 @@ public class Crons {
                                     }
                                 }
                             }
-                            logger.infoAndAddToDb("Starting to delete pending test runs");
+                            logger.debugAndAddToDb("Starting to delete pending test runs");
                             InitializerListener.deleteFileUploads(Context.accountId.get());
-                            logger.infoAndAddToDb("Finished deleting pending test runs");
+                            logger.debugAndAddToDb("Finished deleting pending test runs");
                         } catch (Exception e) {
                             e.printStackTrace();
                         }
@@ -83,7 +82,7 @@ public class Crons {
                             int accId = Context.accountId.get();
                             RuntimeMetrics runtimeMetrics = RuntimeMetricsDao.instance.findOne(Filters.empty());
                             if (runtimeMetrics == null) {
-                                logger.infoAndAddToDb("Skipping traffic alert cron " + accId);
+                                logger.debugAndAddToDb("Skipping traffic alert cron " + accId);
                                 return;
                             }
                             List<Bson> pipeline = new ArrayList<>();

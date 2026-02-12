@@ -25,6 +25,7 @@ function OktaIntegration() {
     const [nextButtonActive,setNextButtonActive] = useState(true)
 
     const redirectUri = hostname + "/authorization-code/callback"
+    const initiateLoginUri = hostname + "/okta-initiate-login?accountId=" + window.ACTIVE_ACCOUNT
 
     const integrationSteps = [
         {
@@ -37,8 +38,12 @@ function OktaIntegration() {
             text: "In 'App integration name' field, fill 'Akto'.",
         },
         {
-            text: "In 'Sign-in redirect URIs' field, fill the below URL below",
+            text: "In 'Sign-in redirect URIs' field, fill the below URL below.",
             component: <CopyCommand command={redirectUri} />
+        },
+        {
+            text: "In 'Initiate login URI' field, fill the below URL below. (Required only if you are using 'Login initiated by Okta' option)",
+            component: <CopyCommand command={initiateLoginUri} />
         },
         {
             text: "In 'Assignments' choose the access you required and then click on 'Save'."
@@ -49,7 +54,7 @@ function OktaIntegration() {
     ]
 
     const handleSubmit = async() => {
-        if(clientId.length > 0 && clientSecret.length > 0 && oktaDomain.length > 0 && authorizationServerId.length > 0){
+        if(clientId.length > 0 && clientSecret.length > 0 && oktaDomain.length > 0){
             await settingRequests.addOktaSso(clientId,clientSecret, authorizationServerId, oktaDomain, redirectUri)
             func.setToast(true, false, "Okta SSO fields saved successfully!")
             setComponentType(2)

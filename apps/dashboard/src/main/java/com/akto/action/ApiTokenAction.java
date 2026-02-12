@@ -1,10 +1,13 @@
 package com.akto.action;
 
+import com.akto.audit_logs_util.Audit;
 import com.akto.dao.ApiTokensDao;
 import com.akto.dao.context.Context;
 import com.akto.dao.notifications.SlackWebhooksDao;
 import com.akto.dto.ApiToken;
 import com.akto.dto.ApiToken.Utility;
+import com.akto.dto.audit_logs.Operation;
+import com.akto.dto.audit_logs.Resource;
 import com.akto.dto.notifications.SlackWebhook;
 import com.akto.dto.type.KeyTypes;
 import com.akto.dto.type.SingleTypeInfo;
@@ -30,6 +33,7 @@ public class ApiTokenAction extends UserAction implements ServletRequestAware {
     private static final RandomString randomString = new RandomString(keyLength);
     private ApiToken.Utility tokenUtility;
 
+    @Audit(description = "User added an API token", resource = Resource.API_TOKEN, operation = Operation.CREATE, metadataGenerators = {"getTokenUtility"})
     public String addApiToken() {
         String username = getSUser().getLogin();
         String apiKey = randomString.nextString();
@@ -54,6 +58,8 @@ public class ApiTokenAction extends UserAction implements ServletRequestAware {
 
     private int apiTokenId;
     private boolean apiTokenDeleted;
+
+    @Audit(description = "User deleted an API token", resource = Resource.API_TOKEN, operation = Operation.DELETE)
     public String deleteApiToken() {
         String username = getSUser().getLogin();
         DeleteResult deleteResult = ApiTokensDao.instance.getMCollection().deleteOne(
@@ -83,7 +89,7 @@ public class ApiTokenAction extends UserAction implements ServletRequestAware {
         List<SlackWebhook> slackWebhooks = SlackWebhooksDao.instance.findAll(new BasicDBObject());
         for(SlackWebhook sw: slackWebhooks) {
             ApiToken slackToken = 
-                new ApiToken(sw.getId(), Context.accountId.get(), sw.getWebhook(), sw.getWebhook(), 
+                new ApiToken(sw.getId(), Context.accountId.get(), sw.getSlackWebhookName(), sw.getWebhook(),
                 sw.getId(), sw.getUserEmail(), Utility.SLACK);
                 
             apiTokenList.add(slackToken);
@@ -97,7 +103,7 @@ public class ApiTokenAction extends UserAction implements ServletRequestAware {
         List<SlackWebhook> slackWebhooks = SlackWebhooksDao.instance.findAll(new BasicDBObject());
         for(SlackWebhook sw: slackWebhooks) {
             ApiToken slackToken = 
-                new ApiToken(sw.getId(), Context.accountId.get(), sw.getWebhook(), sw.getWebhook(), 
+                new ApiToken(sw.getId(), Context.accountId.get(), sw.getSlackWebhookName(), sw.getWebhook(), 
                 sw.getId(), sw.getUserEmail(), Utility.SLACK);
                 
             apiTokenList.add(slackToken);
@@ -108,8 +114,9 @@ public class ApiTokenAction extends UserAction implements ServletRequestAware {
 
     private String error;
     private String webhookUrl;
+    private String webhookName;
     private String dashboardUrl;
-    private int frequencyInSeconds; 
+    private int frequencyInSeconds;
     public int getFrequencyInSeconds() {
         return frequencyInSeconds;
     }
@@ -133,7 +140,7 @@ public class ApiTokenAction extends UserAction implements ServletRequestAware {
 
             setFrequencyInSeconds(24*60*60); // set initially to one day
 
-            SlackWebhook newWebhook = new SlackWebhook(now, webhookUrl, 1, 1, now, getSUser().getLogin(), dashboardUrl,now,frequencyInSeconds);
+            SlackWebhook newWebhook = new SlackWebhook(now, webhookUrl, 1, 1, now, getSUser().getLogin(), dashboardUrl,now,frequencyInSeconds, webhookName);
             this.apiTokenId = SlackWebhooksDao.instance.insertOne(newWebhook).getInsertedId().asInt32().getValue();
         }
 
@@ -183,6 +190,14 @@ public class ApiTokenAction extends UserAction implements ServletRequestAware {
 
     public void setTokenUtility(ApiToken.Utility tokenUtility) {
         this.tokenUtility = tokenUtility;
+    }
+
+    public String getWebhookName() {
+        return webhookName;
+    }
+
+    public void setWebhookName(String webhookName) {
+        this.webhookName = webhookName;
     }
 
     @Override

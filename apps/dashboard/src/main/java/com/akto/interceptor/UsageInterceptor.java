@@ -3,7 +3,9 @@ package com.akto.interceptor;
 import java.util.HashMap;
 import java.util.Map;
 
+import com.akto.dao.RBACDao;
 import com.akto.dao.billing.OrganizationsDao;
+import com.akto.dto.User;
 import com.akto.dto.billing.FeatureAccess;
 import com.akto.dto.billing.Organization;
 import com.akto.filter.UserDetailsFilter;
@@ -18,6 +20,8 @@ import com.opensymphony.xwork2.interceptor.AbstractInterceptor;
 public class UsageInterceptor extends AbstractInterceptor {
 
     private static final LoggerMaker loggerMaker = new LoggerMaker(UsageInterceptor.class, LogDb.DASHBOARD);
+
+    final static String _FEATURE_LABEL = "featureLabel";
 
     String featureLabel;
 
@@ -54,6 +58,12 @@ public class UsageInterceptor extends AbstractInterceptor {
 
             int gracePeriod = organization.getGracePeriod();
 
+            Object moreFeatures = invocation.getInvocationContext().get(_FEATURE_LABEL);
+            String featureLabel = new String(this.featureLabel);
+            if (moreFeatures != null && moreFeatures instanceof String) {
+                featureLabel = featureLabel.concat(" ").concat((String) moreFeatures);
+            }
+
             String[] features = featureLabel.split(" ");
             for (String feature : features) {
                 feature = feature.trim();
@@ -85,10 +95,22 @@ public class UsageInterceptor extends AbstractInterceptor {
                 }
             }
 
+
+            User user = (User) session.get(RoleAccessInterceptor.USER);
+            if(user == null) {
+                throw new Exception("User not found in session, returning from interceptor");
+            }
+
+            if(!RBACDao.hasAccessToFeature(user.getId(), sessionAccId, featureLabel)){
+                ((ActionSupport) invocation.getAction())
+                                .addActionError("This role doesn't have access to the feature: " + featureLabel);
+                        return UNAUTHORIZED;
+            }
+
         } catch (Exception e) {
             String api = invocation.getProxy().getActionName();
             String error = "Error in UsageInterceptor for api: " + api + " ERROR: " + e.getMessage();
-            loggerMaker.errorAndAddToDb(e, error, LogDb.DASHBOARD);
+            loggerMaker.errorAndAddToDb(e, error);
         }
 
         return invocation.invoke();

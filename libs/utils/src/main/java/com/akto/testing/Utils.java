@@ -14,25 +14,29 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.bson.conversions.Bson;
 import org.bson.types.ObjectId;
-import org.springframework.util.StringUtils;
+import org.apache.commons.lang3.StringUtils;
 
 import com.akto.dao.ApiCollectionsDao;
 import com.akto.dao.context.Context;
+import com.akto.dao.test_editor.TestingRunPlaygroundDao;
 import com.akto.dao.testing.TestingRunResultDao;
 import com.akto.dao.testing.VulnerableTestingRunResultDao;
 import com.akto.dao.testing_run_findings.TestingRunIssuesDao;
 import com.akto.dto.ApiCollection;
 import com.akto.dto.ApiInfo.ApiInfoKey;
 import com.akto.dto.OriginalHttpRequest;
+import com.akto.dto.OriginalHttpResponse;
 import com.akto.dto.RawApi;
 import com.akto.dto.CollectionConditions.ConditionsType;
 import com.akto.dto.test_editor.DataOperandsFilterResponse;
 import com.akto.dto.test_editor.FilterNode;
+import com.akto.dto.test_editor.TestingRunPlayground;
 import com.akto.dto.test_editor.Util;
 import com.akto.dto.test_run_findings.TestingIssuesId;
 import com.akto.dto.test_run_findings.TestingRunIssues;
@@ -45,6 +49,7 @@ import com.akto.dto.testing.TestResult.TestError;
 import com.akto.dto.testing.TestingEndpoints;
 import com.akto.dto.testing.TestingRun;
 import com.akto.dto.testing.TestingRunResult;
+import com.akto.dto.testing.UrlModifierPayload;
 import com.akto.dto.testing.WorkflowUpdatedSampleData;
 import com.akto.dto.type.RequestTemplate;
 import com.akto.log.LoggerMaker;
@@ -66,12 +71,13 @@ import com.mongodb.client.model.Accumulators;
 import com.mongodb.client.model.Aggregates;
 import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.Projections;
+import com.mongodb.client.result.InsertOneResult;
 
 import okhttp3.MediaType;
 
 public class Utils {
 
-    private static final LoggerMaker loggerMaker = new LoggerMaker(Utils.class);
+    private static final LoggerMaker loggerMaker = new LoggerMaker(Utils.class, LogDb.TESTING);
 
     public static void populateValuesMap(Map<String, Object> valuesMap, String payloadStr, String nodeId, Map<String,
             List<String>> headers, boolean isRequest, String queryParams) {
@@ -148,8 +154,46 @@ public class Utils {
                     String val =  String.join(";", headers.get(headerName));
                     valuesMap.put(key, val);
             }
-            
-            
+
+            // Extract individual cookie keys from Cookie and Set-Cookie headers
+            if (headerName.equalsIgnoreCase("cookie") || headerName.equalsIgnoreCase("set-cookie")) {
+                for (String headerValue : headerValues) {
+                    if (headerValue == null || headerValue.isEmpty()) {
+                        continue;
+                    }
+
+                    // Parse cookies from the header value
+                    // Cookie format: "key1=value1; key2=value2"
+                    // Set-Cookie format: "key=value; Path=/; HttpOnly" (may have attributes)
+                    String[] cookiePairs = headerValue.split(";");
+                    for (String cookiePair : cookiePairs) {
+                        cookiePair = cookiePair.trim();
+                        int equalsIndex = cookiePair.indexOf('=');
+                        if (equalsIndex > 0) {
+                            String cookieKey = cookiePair.substring(0, equalsIndex).trim();
+                            String cookieValue = cookiePair.substring(equalsIndex + 1).trim();
+
+                            // Skip Set-Cookie attributes (Path, Domain, Secure, HttpOnly, SameSite, Max-Age, Expires)
+                            if (headerName.equalsIgnoreCase("set-cookie")) {
+                                if (cookieKey.equalsIgnoreCase("Path") ||
+                                    cookieKey.equalsIgnoreCase("Domain") ||
+                                    cookieKey.equalsIgnoreCase("Secure") ||
+                                    cookieKey.equalsIgnoreCase("HttpOnly") ||
+                                    cookieKey.equalsIgnoreCase("SameSite") ||
+                                    cookieKey.equalsIgnoreCase("Max-Age") ||
+                                    cookieKey.equalsIgnoreCase("Expires")) {
+                                    continue;
+                                }
+                            }
+
+                            // Store individual cookie key-value pair
+                            String cookieMapKey = nodeId + "." + reqOrResp + "." + "header" + "." + headerName + "." + cookieKey;
+                            valuesMap.put(cookieMapKey, cookieValue);
+                        }
+                    }
+                }
+            }
+
         }
     }
 
@@ -487,6 +531,37 @@ public class Utils {
         httpRequest.setQueryParams(queryParams);
     }
 
+    public static void modifyUrlParamOperations(OriginalHttpRequest originalHttpRequest, List<ConditionsType> modifyUrlParams, String operationType) {
+        if (modifyUrlParams == null || modifyUrlParams.isEmpty()) {
+            return;
+        }
+
+        for (ConditionsType condition : modifyUrlParams) {
+            try {
+                // get the urlsList for the filter condition
+                Set<String> urlsList = condition.getUrlsList();
+                if (urlsList == null || urlsList.isEmpty()) {
+                    continue;
+                }
+
+                // iterate over the urlsList and modify the url
+                String currentUrl = originalHttpRequest.getUrl();
+                String currentMethod = originalHttpRequest.getMethod();
+                if(!urlsList.contains(currentMethod + " " + currentUrl)){
+                    continue;
+                }
+
+                // now we have to call modifyURL
+                UrlModifierPayload urlModifierPayload = new UrlModifierPayload("", condition.getPosition(), condition.getValue(), operationType);
+                String newUrl = com.akto.test_editor.Utils.buildNewUrl(urlModifierPayload, currentUrl);
+                originalHttpRequest.setUrl(newUrl);
+            } catch (Exception e) {
+                // Log error but continue with other operations
+                System.err.println("Error modifying URL parameter: " + e.getMessage());
+            }
+        }
+    }
+
     public static Map<String, Integer> finalCountIssuesMap(ObjectId testingRunResultSummaryId){
         Map<String, Integer> countIssuesMap = new HashMap<>();
         countIssuesMap.put(Severity.CRITICAL.toString(), 0);
@@ -562,9 +637,9 @@ public class Utils {
         List<GenericTestResult> testResults = new ArrayList<>();
         String failMessage = errorMessage;
 
-        if(!StringUtils.hasLength(errorMessage) && deactivatedCollections.contains(apiInfoKey.getApiCollectionId())){
+        if(!StringUtils.isNotEmpty(errorMessage) && deactivatedCollections.contains(apiInfoKey.getApiCollectionId())){
             failMessage = TestError.DEACTIVATED_ENDPOINT.getMessage();
-        }else if(!StringUtils.hasLength(errorMessage) && (messages == null || messages.isEmpty())){
+        }else if(!StringUtils.isNotEmpty(errorMessage) && (messages == null || messages.isEmpty())){
             failMessage = TestError.NO_PATH.getMessage();
         }
             
@@ -666,4 +741,89 @@ public class Utils {
         }
     }
     
+    public static int compareVersions(String v1, String v2) {
+        try {
+            String[] parts1 = v1.split("\\.");
+            String[] parts2 = v2.split("\\.");
+
+            int length = Math.max(parts1.length, parts2.length);
+            for (int i = 0; i < length; i++) {
+                int num1 = i < parts1.length ? Integer.parseInt(parts1[i]) : 0;
+                int num2 = i < parts2.length ? Integer.parseInt(parts2[i]) : 0;
+                if (num1 != num2) {
+                    return Integer.compare(num1, num2);
+                }
+            }
+            return 0;
+        } catch (Exception e) {
+            loggerMaker.errorAndAddToDb(e, "Error comparing versions: " + e.getMessage());
+        }
+        return 1;
+    }
+
+    public static OriginalHttpResponse runRequestOnHybridTesting(OriginalHttpRequest originalHttpRequest){
+        OriginalHttpResponse res = null;
+        TestingRunPlayground testingRunPlayground = new TestingRunPlayground();
+        testingRunPlayground.setState(TestingRun.State.SCHEDULED);
+        testingRunPlayground.setCreatedAt(Context.now());
+        testingRunPlayground.setTestingRunPlaygroundType(TestingRunPlayground.TestingRunPlaygroundType.POSTMAN_IMPORTS);
+        testingRunPlayground.setOriginalHttpRequest(originalHttpRequest);
+        InsertOneResult insertOne = TestingRunPlaygroundDao.instance.insertOne(testingRunPlayground);
+        if (insertOne.wasAcknowledged()) {
+            String testingRunPlaygroundHexId = Objects.requireNonNull(insertOne.getInsertedId()).asObjectId().getValue().toHexString();
+            int startTime = Context.now();
+            int timeout = 5 * 60; // 5 minutes
+            
+            TestingRunPlayground currentState = null;
+            while (Context.now() - startTime <= timeout) {
+                currentState = TestingRunPlaygroundDao.instance.findOne(
+                    Filters.eq("_id", new ObjectId(testingRunPlaygroundHexId))
+                );
+                
+                if (currentState == null || 
+                    currentState.getState() == TestingRun.State.COMPLETED || 
+                    currentState.getState() == TestingRun.State.FAILED) {
+                    break;
+                }
+                
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+            
+            res = (currentState != null && (currentState.getState() != TestingRun.State.FAILED
+                    || currentState.getState() != TestingRun.State.SCHEDULED)) ?
+                currentState.getOriginalHttpResponse() : new OriginalHttpResponse();
+        } else {
+            res = new OriginalHttpResponse();
+        }
+        return res;
+    }
+
+    public static boolean isStatusGood(int statusCode) {
+        return statusCode >= 200 && statusCode < 300 && statusCode != 250;
+    }
+
+    public static int getRelaxingTimeForTests(AtomicInteger totalTestsToBeExecuted, int totalTestsToBeExecutedCount){
+        AtomicInteger testsLeft = new AtomicInteger(Math.max(totalTestsToBeExecuted.get(), 0));
+        double percentageTestsCompleted = (1 - ((testsLeft.get() * 1.0) / totalTestsToBeExecutedCount))* 100.0;
+        int relaxingTime = 20 * 60;
+        if(percentageTestsCompleted == 100.0){
+            return 0;
+        }
+        if(percentageTestsCompleted > 95.0){
+            relaxingTime = 60;
+        }else if(percentageTestsCompleted > 90.0){
+            relaxingTime = 2 * 60;
+        }else if(percentageTestsCompleted > 75.0){
+            relaxingTime = 10 * 60;
+        }else if(percentageTestsCompleted > 50.0){
+            relaxingTime = 15 * 60;
+        }
+        return relaxingTime;
+    }
+
 }

@@ -20,6 +20,7 @@
                 </script>
                 <script src="https://apis.google.com/js/client:platform.js?onload=start" async defer>
                 </script>
+                <script src="https://unpkg.com/@tailwindcss/browser@4"></script>
                 <script type="text/javascript">
                     (function (f, b) {
                         if (!b.__SV) {
@@ -53,6 +54,7 @@
                     window.ACCOUNTS = JSON.parse('${requestScope.accounts}' || '{}');
                     window.ACTIVE_ACCOUNT = +'${requestScope.activeAccount}';
                     window.DASHBOARD_MODE = '${requestScope.dashboardMode}';
+                    window.DASHBOARD_CATEGORY = '${requestScope.dashboardCategory}';
                     window.CLOUD_TYPE = '${requestScope.cloudType}';
                     window.IS_SAAS = '${requestScope.isSaas}';
                     window.ACCESS_TOKEN = '${accessToken}';
@@ -68,6 +70,9 @@
                     window.STIGG_CUSTOMER_TOKEN='${requestScope.stiggCustomerToken}'
                     window.STIGG_CLIENT_KEY='${requestScope.stiggClientKey}'
                     window.JIRA_INTEGRATED ='${requestScope.jiraIntegrated}'
+                    window.AZURE_BOARDS_INTEGRATED ='${requestScope.azureBoardsIntegrated}'
+                    window.SERVICENOW_INTEGRATED ='${requestScope.servicenowIntegrated}'
+                    window.DEVREV_INTEGRATED ='${requestScope.devrevIntegrated}'
                     window.USER_ROLE ='${requestScope.userRole}'
                     window.TIME_ZONE = '${requestScope.currentTimeZone}'
                     window.USER_FULL_NAME = '${requestScope.userFullName}'
@@ -77,6 +82,9 @@
                     window.AZURE_AUTH_URL = '${requestScope.azureAuthUrl}'
                     window.GITHUB_AUTH_URL = '${requestScope.githubAuthUrl}'
                     window.ACTIVE_SSO = '${requestScope.activeSso}'
+
+                    window.IS_AWS_WAF_INTEGRATED = '${requestScope.isAwsWafIntegrated}'
+                    window.IS_CLOUDFLARE_WAF_INTEGRATED = '${requestScope.isCloudflareWafIntegrated}'
 
                     window.STIGG_IS_OVERAGE='${requestScope.stiggIsOverage}'
                     window.USAGE_PAUSED=JSON.parse('${requestScope.usagePaused}' || '{}');
@@ -103,6 +111,10 @@
                     window.PLAN_TYPE = '${requestScope.planType}'
 
                     window.TRIAL_MSG = '${requestScope.trialMsg}'
+                    
+                    window.PROTECTIONTRIAL_MSG = '${requestScope.protectionTrialMsg}'
+
+                    window.AGENTTRIAL_MSG = '${requestScope.agentTrialMsg}'
 
                     // Enabling the debug mode flag is useful during implementation,
                     // but it's recommended you remove it for production
@@ -170,8 +182,9 @@
                  <!-- needed for react -->
                 <div id="root"></div>
                 <script>
-                    var beamer_config = {
-                        product_id : 'TEEsyHNL42222', //DO NOT CHANGE: This is your product code on Beamer
+                        var beamer_config = {
+                        product_id: 'cJtNevEq80216',
+                        filter: 'filterTag',
                         selector: '#beamer-btn',
                         top: 0,
                         left: 0,
@@ -182,12 +195,14 @@
                 <script>
                     var script = document.createElement('script');
                     script.type = "text/javascript"
-                    if (window.RELEASE_VERSION_GLOBAL == '' || window.RELEASE_VERSION_GLOBAL == 'akto-release-version') {// Case when akto version is not available
+                    if ('${requestScope.nodeEnv}' === 'development') {
+                        script.src = "http://localhost:3000/dist/main.js";
+                    } else if (window.RELEASE_VERSION_GLOBAL == '' || window.RELEASE_VERSION_GLOBAL == 'akto-release-version') {
                         script.src = "/polaris_web/web/dist/main.js";
                     } else if (window.RELEASE_VERSION == '' || window.RELEASE_VERSION == 'akto-release-version') {
-                        script.src = "https://d1hvi6xs55woen.cloudfront.net/polaris_web/" + window.RELEASE_VERSION_GLOBAL + "/dist/main.js";;
+                        script.src = "https://d1hvi6xs55woen.cloudfront.net/polaris_web/" + window.RELEASE_VERSION_GLOBAL + "/dist/main.js";
                     } else {
-                        script.src = "https://d1hvi6xs55woen.cloudfront.net/polaris_web/" + window.RELEASE_VERSION + "/dist/main.js";;
+                        script.src = "https://d1hvi6xs55woen.cloudfront.net/polaris_web/" + window.RELEASE_VERSION + "/dist/main.js";
                     }
                     document.body.appendChild(script);
                 </script>
