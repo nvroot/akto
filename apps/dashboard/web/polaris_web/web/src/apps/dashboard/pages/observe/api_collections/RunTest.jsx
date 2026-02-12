@@ -152,6 +152,7 @@ function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOu
             testSourceConfigs: []
         }
 
+        let categoryMapForFiltering = localCategoryMap;
         if ((localCategoryMap && Object.keys(localCategoryMap).length > 0) && (localSubCategoryMap && Object.keys(localSubCategoryMap).length > 0)) {
             metaDataObj = {
                 categories: Object.values(localCategoryMap),
@@ -161,8 +162,15 @@ function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOu
 
         } else {
             metaDataObj = await transform.getAllSubcategoriesData(true, "runTests")
+
+            if (!localCategoryMap || Object.keys(localCategoryMap).length === 0) {
+                categoryMapForFiltering = {};
+                metaDataObj.categories.forEach(category => {
+                    categoryMapForFiltering[category.name] = category;
+                });
+            }
         }
-        let categoriesName = getCategoriesBasedOnDashboardCategory(dashboardCategory, localCategoryMap);
+        let categoriesName = getCategoriesBasedOnDashboardCategory(dashboardCategory, categoryMapForFiltering);
         metaDataObj.subCategories = filterSubCategoriesBasedOnCategories(metaDataObj.subCategories, categoriesName);
         let categories = metaDataObj.categories
         categories = func.sortByCategoryPriority(categories, 'name')
@@ -676,7 +684,11 @@ function RunTest({ endpoints, filtered, apiCollectionId, disabled, runTestFromOu
                 totalTokens += t.estimatedTokens;
             });
         });
-        const totalApis = endpoints ? endpoints.length : 0;
+
+        const totalApis = (selectedResourcesForPrimaryAction && selectedResourcesForPrimaryAction.length > 0)
+            ? selectedResourcesForPrimaryAction.length
+            : (endpoints ? endpoints.length : 0);
+            
         return totalTokens * totalApis;
     }
 
